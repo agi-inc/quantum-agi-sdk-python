@@ -112,8 +112,8 @@ The agent can perform these actions:
 ## Running the Cloud Server
 
 ```bash
-# Set your Anthropic API key
-export ANTHROPIC_API_KEY=your_key_here
+# Set your Anthropic API key in .env.local
+echo "ANTHROPIC_API_KEY=your_key_here" > .env.local
 
 # Run the server
 python -m quantum_agi_sdk.cloud.server
@@ -128,6 +128,12 @@ import uvicorn
 app = create_app()
 uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
+
+### API Endpoints
+
+- `GET /health` - Health check
+- `POST /v1/inference` - Get next action from screenshot
+- `GET /v1/tools` - List available actions
 
 ## Safety Features
 

@@ -175,3 +175,65 @@ class InferenceResponse(BaseModel):
     confidence: float = Field(default=1.0, description="Confidence score 0-1")
     requires_confirmation: bool = Field(default=False)
     estimated_remaining_steps: Optional[int] = None
+
+
+# ============================================================================
+# NEW API MODELS (agi-api integration)
+# ============================================================================
+
+
+class StartSessionRequest(BaseModel):
+    """Request to start a quantum agent session"""
+
+    task: str = Field(..., description="Task/goal for the agent")
+    device_id: Optional[str] = Field(default=None, description="Optional device ID")
+    context: Optional[dict] = Field(default=None, description="Optional context")
+
+
+class StartSessionResponse(BaseModel):
+    """Response from starting a session"""
+
+    id: str = Field(..., description="Session UUID")
+    task: str
+    status: str
+    step_count: int
+    device_id: Optional[str] = None
+    started_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class QuantumInferenceRequest(BaseModel):
+    """Request for quantum inference step"""
+
+    screenshot_base64: str = Field(..., description="Base64-encoded PNG screenshot")
+    original_width: int = Field(..., gt=0)
+    original_height: int = Field(..., gt=0)
+    history: list[dict] = Field(default_factory=list)
+
+
+class QuantumInferenceResponse(BaseModel):
+    """Response from quantum inference"""
+
+    session_id: str
+    step_number: int
+    action: dict
+    reasoning: Optional[str] = None
+    confidence: float = 1.0
+    requires_confirmation: bool = False
+
+
+class FinishSessionRequest(BaseModel):
+    """Request to finish a session"""
+
+    status: str = Field(default="stopped", description="stopped, completed, or failed")
+    reason: Optional[str] = None
+
+
+class FinishSessionResponse(BaseModel):
+    """Response from finishing a session"""
+
+    id: str
+    task: str
+    status: str
+    step_count: int
+    finished_at: Optional[str] = None

@@ -149,6 +149,26 @@ uvicorn.run(app, host="0.0.0.0", port=8000)
 - **Step Limit**: Default maximum of 100 steps per task
 - **Pause/Stop**: Agent can be paused or stopped at any time
 
+## Demo Applications
+
+### Qt Demo
+
+A desktop application demonstrating the CUA SDK:
+
+```bash
+# Install PyQt6
+pip install PyQt6
+
+# Run the demo
+python examples/qt_demo.py
+```
+
+Features:
+- Task input and execution
+- Real-time status updates
+- Confirmation dialogs for high-impact actions
+- Activity log viewer
+
 ## Development
 
 ```bash

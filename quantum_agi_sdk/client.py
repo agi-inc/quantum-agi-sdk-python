@@ -1,0 +1,398 @@
+"""
+Main CUA Client - The primary SDK interface
+"""
+
+import asyncio
+import time
+import uuid
+from typing import Any, Callable, Optional
+
+import httpx
+
+from quantum_agi_sdk.capture import ScreenCapture, scale_action_coordinates
+from quantum_agi_sdk.executor import ActionExecutor
+from quantum_agi_sdk.models import (
+    AgentState,
+    AgentStatus,
+    ConfirmationRequest,
+    InferenceRequest,
+    InferenceResponse,
+    TaskResult,
+)
+
+
+class CUAClient:
+    """
+    Computer Use Agent Client
+
+    This is the main interface for the Quantum AGI SDK. It handles:
+    - Task orchestration
+    - Screenshot capture and scaling
+    - Cloud inference communication
+    - Local action execution
+    - Confirmation flow for high-impact actions
+    """
+
+    def __init__(
+        self,
+        api_url: str = "http://localhost:8000",
+        api_key: Optional[str] = None,
+        on_status_change: Optional[Callable[[AgentState], None]] = None,
+        on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
+        on_action_executed: Optional[Callable[[dict], None]] = None,
+        max_steps: int = 100,
+        step_delay: float = 0.5,
+    ):
+        """
+        Initialize the CUA Client.
+
+        Args:
+            api_url: URL of the AGI cloud inference API
+            api_key: API key for authentication
+            on_status_change: Callback for agent status changes
+            on_confirmation_required: Callback when user confirmation is needed
+            on_action_executed: Callback after each action is executed
+            max_steps: Maximum steps before stopping
+            step_delay: Delay between steps in seconds
+        """
+        self._api_url = api_url.rstrip("/")
+        self._api_key = api_key
+        self._on_status_change = on_status_change
+        self._on_confirmation_required = on_confirmation_required
+        self._on_action_executed = on_action_executed
+        self._max_steps = max_steps
+        self._step_delay = step_delay
+
+        self._state = AgentState()
+        self._capture = ScreenCapture()
+        self._executor = ActionExecutor()
+        self._http_client = httpx.AsyncClient(timeout=30.0)
+
+        self._running = False
+        self._paused = False
+        self._pending_confirmation: Optional[ConfirmationRequest] = None
+        self._confirmation_event = asyncio.Event()
+        self._confirmed = False
+        self._action_history: list[dict] = []
+        self._task_start_time: Optional[float] = None
+
+    @property
+    def state(self) -> AgentState:
+        """Get current agent state"""
+        return self._state
+
+    async def start(self, task: str, context: Optional[dict] = None) -> TaskResult:
+        """
+        Start executing a task.
+
+        This is the main entry point. Call this method with the user's intent
+        from Quantum and the agent will execute until completion, failure,
+        or user intervention.
+
+        Args:
+            task: The task/intent from Quantum (e.g., "Book a flight to NYC")
+            context: Optional context from Quantum (user preferences, memories, etc.)
+
+        Returns:
+            TaskResult with success status and details
+        """
+        if self._running:
+            raise RuntimeError("Agent is already running a task")
+
+        self._running = True
+        self._paused = False
+        self._action_history = []
+        self._task_start_time = time.time()
+
+        self._update_state(
+            status=AgentStatus.RUNNING,
+            task=task,
+            current_step=0,
+            progress_message="Starting task...",
+        )
+
+        try:
+            return await self._run_task_loop(task, context)
+        except Exception as e:
+            self._update_state(
+                status=AgentStatus.FAILED,
+                error=str(e),
+            )
+            return TaskResult(
+                success=False,
+                message=f"Task failed: {str(e)}",
+                steps_taken=self._state.current_step,
+                duration_seconds=time.time() - self._task_start_time,
+            )
+        finally:
+            self._running = False
+
+    async def _run_task_loop(self, task: str, context: Optional[dict]) -> TaskResult:
+        """Main task execution loop"""
+        step = 0
+
+        while step < self._max_steps and self._running:
+            # Check if paused
+            while self._paused and self._running:
+                await asyncio.sleep(0.1)
+
+            if not self._running:
+                break
+
+            # Wait for any pending confirmation
+            if self._pending_confirmation:
+                self._update_state(
+                    status=AgentStatus.WAITING_CONFIRMATION,
+                    progress_message=f"Waiting for confirmation: {self._pending_confirmation.action_description}",
+                )
+                await self._confirmation_event.wait()
+                self._confirmation_event.clear()
+
+                if not self._confirmed:
+                    # User denied confirmation
+                    self._pending_confirmation = None
+                    self._update_state(
+                        status=AgentStatus.STOPPED,
+                        progress_message="User denied confirmation",
+                    )
+                    return TaskResult(
+                        success=False,
+                        message="User denied confirmation",
+                        steps_taken=step,
+                        duration_seconds=time.time() - self._task_start_time,
+                    )
+
+                # Execute the confirmed action
+                if self._pending_confirmation.pending_action:
+                    await self._execute_action(self._pending_confirmation.pending_action)
+                self._pending_confirmation = None
+                self._update_state(status=AgentStatus.RUNNING)
+                continue
+
+            step += 1
+            self._update_state(
+                current_step=step,
+                progress_message=f"Executing step {step}...",
+            )
+
+            # Capture screenshot
+            screenshot_b64, orig_width, orig_height = self._capture.capture_scaled()
+
+            # Get next action from cloud inference
+            request = InferenceRequest(
+                task=task,
+                screenshot_base64=screenshot_b64,
+                original_width=orig_width,
+                original_height=orig_height,
+                context=context,
+                history=self._action_history[-10:],  # Last 10 actions for context
+                step_number=step,
+            )
+
+            response = await self._call_inference(request)
+
+            # Process the action
+            action = response.action
+
+            # Check if confirmation is required
+            if response.requires_confirmation or action.get("type") == "confirm":
+                self._pending_confirmation = ConfirmationRequest(
+                    id=str(uuid.uuid4()),
+                    action_description=action.get(
+                        "action_description", response.reasoning or "Confirm this action?"
+                    ),
+                    impact_level=action.get("impact_level", "high"),
+                    pending_action=action.get("pending_action", action),
+                    context={"step": step, "task": task},
+                )
+                if self._on_confirmation_required:
+                    self._on_confirmation_required(self._pending_confirmation)
+                continue
+
+            # Check for task completion
+            if action.get("type") == "done":
+                self._update_state(
+                    status=AgentStatus.COMPLETED,
+                    progress_message=action.get("message", "Task completed successfully"),
+                )
+                return TaskResult(
+                    success=True,
+                    message=action.get("message", "Task completed successfully"),
+                    steps_taken=step,
+                    duration_seconds=time.time() - self._task_start_time,
+                )
+
+            # Check for failure
+            if action.get("type") == "fail":
+                self._update_state(
+                    status=AgentStatus.FAILED,
+                    error=action.get("reason", "Unknown error"),
+                )
+                return TaskResult(
+                    success=False,
+                    message=action.get("reason", "Task failed"),
+                    steps_taken=step,
+                    duration_seconds=time.time() - self._task_start_time,
+                )
+
+            # Execute the action
+            await self._execute_action(action, orig_width, orig_height)
+
+            # Record action in history
+            self._action_history.append(action)
+
+            # Delay between steps
+            await asyncio.sleep(self._step_delay)
+
+        # Max steps reached
+        self._update_state(
+            status=AgentStatus.FAILED,
+            error="Maximum steps reached",
+        )
+        return TaskResult(
+            success=False,
+            message="Maximum steps reached without completing task",
+            steps_taken=step,
+            duration_seconds=time.time() - self._task_start_time,
+        )
+
+    async def _execute_action(
+        self,
+        action: dict,
+        orig_width: Optional[int] = None,
+        orig_height: Optional[int] = None,
+    ):
+        """Execute a single action"""
+        # Scale coordinates if needed
+        if orig_width and orig_height:
+            action = scale_action_coordinates(action, orig_width, orig_height)
+
+        self._update_state(last_action=action)
+
+        # Execute locally
+        self._executor.execute(action)
+
+        if self._on_action_executed:
+            self._on_action_executed(action)
+
+    async def _call_inference(self, request: InferenceRequest) -> InferenceResponse:
+        """Call the cloud inference API"""
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/inference",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+
+        return InferenceResponse(**response.json())
+
+    def pause(self):
+        """
+        Pause the agent execution.
+
+        The agent will complete the current action and then wait.
+        Call resume() to continue.
+        """
+        if not self._running:
+            return
+
+        self._paused = True
+        self._update_state(
+            status=AgentStatus.PAUSED,
+            progress_message="Agent paused",
+        )
+
+    def resume(self):
+        """Resume a paused agent"""
+        if not self._running:
+            return
+
+        self._paused = False
+        self._update_state(
+            status=AgentStatus.RUNNING,
+            progress_message="Agent resumed",
+        )
+
+    def stop(self):
+        """
+        Stop the agent execution completely.
+
+        This will abort the current task.
+        """
+        self._running = False
+        self._paused = False
+        self._update_state(
+            status=AgentStatus.STOPPED,
+            progress_message="Agent stopped by user",
+        )
+        # Release any waiting confirmations
+        self._confirmed = False
+        self._confirmation_event.set()
+
+    def confirm(self, confirmation_id: str, approved: bool = True):
+        """
+        Respond to a confirmation request.
+
+        Args:
+            confirmation_id: ID of the confirmation request
+            approved: True to approve, False to deny
+        """
+        if not self._pending_confirmation:
+            return
+
+        if self._pending_confirmation.id != confirmation_id:
+            return
+
+        self._confirmed = approved
+        self._confirmation_event.set()
+
+    def _update_state(self, **kwargs):
+        """Update agent state and notify listeners"""
+        for key, value in kwargs.items():
+            if hasattr(self._state, key):
+                setattr(self._state, key, value)
+
+        if self._on_status_change:
+            self._on_status_change(self._state)
+
+    async def close(self):
+        """Clean up resources"""
+        await self._http_client.aclose()
+        self._capture.close()
+
+
+# Synchronous wrapper for ease of use
+class CUAClientSync:
+    """Synchronous wrapper for CUAClient"""
+
+    def __init__(self, *args, **kwargs):
+        self._async_client = CUAClient(*args, **kwargs)
+        self._loop = asyncio.new_event_loop()
+
+    def start(self, task: str, context: Optional[dict] = None) -> TaskResult:
+        """Start a task synchronously"""
+        return self._loop.run_until_complete(self._async_client.start(task, context))
+
+    def pause(self):
+        self._async_client.pause()
+
+    def resume(self):
+        self._async_client.resume()
+
+    def stop(self):
+        self._async_client.stop()
+
+    def confirm(self, confirmation_id: str, approved: bool = True):
+        self._async_client.confirm(confirmation_id, approved)
+
+    @property
+    def state(self) -> AgentState:
+        return self._async_client.state
+
+    def close(self):
+        self._loop.run_until_complete(self._async_client.close())
+        self._loop.close()

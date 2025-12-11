@@ -65,6 +65,13 @@ asyncio.run(main())
 
 ## API Reference
 
+### Core Components
+
+- **CUAClient**: Main orchestration client
+- **ScreenCapture**: Screenshot capture with 1000x1000 scaling
+- **ActionExecutor**: Local action execution (click, type, scroll, etc.)
+- **Models**: Pydantic models for actions, states, and API contracts
+
 ### CUAClient
 
 The main interface for the SDK.

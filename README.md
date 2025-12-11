@@ -26,11 +26,6 @@ Repeat until task completion or confirmation needed
 pip install quantum-agi-sdk
 ```
 
-For server components:
-```bash
-pip install quantum-agi-sdk[server]
-```
-
 ## Quick Start
 
 ```python
@@ -116,46 +111,15 @@ The agent can perform these actions:
 | `fail` | Task failed |
 | `confirm` | Request user confirmation |
 
-## Running the Cloud Server
+## Cloud Server
+
+The SDK requires a cloud inference server running. See the [quantum-agi-cloud](https://github.com/agi-inc/quantum-agi-cloud) repository for the server implementation.
 
 ```bash
-# Set your Anthropic API key in .env.local
-echo "ANTHROPIC_API_KEY=your_key_here" > .env.local
-
-# Run the server
-python -m quantum_agi_sdk.cloud.server
+# Install and run the cloud server
+pip install quantum-agi-cloud
+quantum-agi-server
 ```
-
-Or programmatically:
-
-```python
-from quantum_agi_sdk.cloud import create_app
-import uvicorn
-
-app = create_app()
-uvicorn.run(app, host="0.0.0.0", port=8000)
-```
-
-### API Endpoints
-
-- `GET /health` - Health check
-- `POST /v1/inference` - Get next action from screenshot
-- `GET /v1/tools` - List available actions
-
-### MCP Server
-
-Run as an MCP (Model Context Protocol) server for AI assistant integration:
-
-```bash
-# Run MCP server (stdio transport)
-python -m quantum_agi_sdk.cloud.mcp_server
-```
-
-Available MCP tools:
-- `cua_start_task` - Initialize a computer use task
-- `cua_infer_action` - Get next action from screenshot
-- `cua_get_available_actions` - List available actions
-- `cua_scale_coordinates` - Convert inference coords to screen coords
 
 ## Safety Features
 
@@ -166,29 +130,15 @@ Available MCP tools:
 
 ## Demo Applications
 
-### Qt Demo
-
-A desktop application demonstrating the CUA SDK:
-
-```bash
-# Install PyQt6
-pip install PyQt6
-
-# Run the demo
-python examples/qt_demo.py
-```
-
-Features:
-- Task input and execution
-- Real-time status updates
-- Confirmation dialogs for high-impact actions
-- Activity log viewer
+See the demo repositories:
+- [quantum-agi-qt-demo](https://github.com/agi-inc/quantum-agi-qt-demo) - PyQt6 desktop application
+- [quantum-agi-electron-demo](https://github.com/agi-inc/quantum-agi-electron-demo) - Electron desktop application
 
 ## Development
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev,server]"
+pip install -e ".[dev]"
 
 # Run tests
 pytest

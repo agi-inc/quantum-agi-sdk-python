@@ -10,6 +10,12 @@ import json
 import os
 from typing import Optional
 
+from dotenv import load_dotenv
+
+# Load environment variables from .env and .env.local
+load_dotenv()
+load_dotenv(".env.local")
+
 import anthropic
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware

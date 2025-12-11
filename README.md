@@ -142,6 +142,21 @@ uvicorn.run(app, host="0.0.0.0", port=8000)
 - `POST /v1/inference` - Get next action from screenshot
 - `GET /v1/tools` - List available actions
 
+### MCP Server
+
+Run as an MCP (Model Context Protocol) server for AI assistant integration:
+
+```bash
+# Run MCP server (stdio transport)
+python -m quantum_agi_sdk.cloud.mcp_server
+```
+
+Available MCP tools:
+- `cua_start_task` - Initialize a computer use task
+- `cua_infer_action` - Get next action from screenshot
+- `cua_get_available_actions` - List available actions
+- `cua_scale_coordinates` - Convert inference coords to screen coords
+
 ## Safety Features
 
 - **Confirmation Flow**: High-impact actions (purchases, bookings, deletions) require user confirmation

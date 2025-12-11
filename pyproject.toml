@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quantum-agi-sdk"
+version = "0.1.0"
+description = "AGI Computer Use Agent SDK for Quantum integration"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "AGI Inc", email = "dev@agi.inc" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "httpx>=0.25.0",
+    "pillow>=10.0.0",
+    "pydantic>=2.0.0",
+    "pyautogui>=0.9.54",
+    "mss>=9.0.0",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/agi-inc/quantum-agi-sdk-python"
+Repository = "https://github.com/agi-inc/quantum-agi-sdk-python"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quantum_agi_sdk"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "W"]

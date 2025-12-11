@@ -18,6 +18,12 @@ from quantum_agi_sdk.models import (
     InferenceRequest,
     InferenceResponse,
     TaskResult,
+    StartSessionRequest,
+    StartSessionResponse,
+    QuantumInferenceRequest,
+    QuantumInferenceResponse,
+    FinishSessionRequest,
+    FinishSessionResponse,
 )
 
 
@@ -75,6 +81,7 @@ class CUAClient:
         self._confirmed = False
         self._action_history: list[dict] = []
         self._task_start_time: Optional[float] = None
+        self._session_id: Optional[str] = None  # Track current session ID
 
     @property
     def state(self) -> AgentState:
@@ -131,6 +138,21 @@ class CUAClient:
         """Main task execution loop"""
         step = 0
 
+        # Start a session with the API
+        try:
+            session = await self._start_session(task, context)
+            self._session_id = session.id
+        except Exception as e:
+            raise RuntimeError(f"Failed to start session: {e}")
+
+        try:
+            return await self._execute_task_loop(task, context, step)
+        finally:
+            # Always finish the session
+            await self._finish_session_safe()
+
+    async def _execute_task_loop(self, task: str, context: Optional[dict], step: int) -> TaskResult:
+        """Execute the task loop after session is started"""
         while step < self._max_steps and self._running:
             # Check if paused
             while self._paused and self._running:
@@ -179,17 +201,14 @@ class CUAClient:
             screenshot_b64, orig_width, orig_height = self._capture.capture_scaled()
 
             # Get next action from cloud inference
-            request = InferenceRequest(
-                task=task,
+            request = QuantumInferenceRequest(
                 screenshot_base64=screenshot_b64,
                 original_width=orig_width,
                 original_height=orig_height,
-                context=context,
                 history=self._action_history[-10:],  # Last 10 actions for context
-                step_number=step,
             )
 
-            response = await self._call_inference(request)
+            response = await self._call_quantum_inference(request)
 
             # Process the action
             action = response.action
@@ -276,7 +295,7 @@ class CUAClient:
             self._on_action_executed(action)
 
     async def _call_inference(self, request: InferenceRequest) -> InferenceResponse:
-        """Call the cloud inference API"""
+        """Call the cloud inference API (legacy endpoint)"""
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -289,6 +308,67 @@ class CUAClient:
         response.raise_for_status()
 
         return InferenceResponse(**response.json())
+
+    async def _start_session(self, task: str, context: Optional[dict]) -> StartSessionResponse:
+        """Start a quantum agent session"""
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        request = StartSessionRequest(task=task, context=context)
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        return StartSessionResponse(**response.json())
+
+    async def _call_quantum_inference(self, request: QuantumInferenceRequest) -> QuantumInferenceResponse:
+        """Call the quantum inference endpoint"""
+        if not self._session_id:
+            raise RuntimeError("No active session")
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/inference",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        return QuantumInferenceResponse(**response.json())
+
+    async def _finish_session(self, status: str = "stopped", reason: Optional[str] = None) -> FinishSessionResponse:
+        """Finish the current session"""
+        if not self._session_id:
+            raise RuntimeError("No active session")
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        request = FinishSessionRequest(status=status, reason=reason)
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/finish",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        self._session_id = None
+        return FinishSessionResponse(**response.json())
+
+    async def _finish_session_safe(self):
+        """Safely finish the session, ignoring errors"""
+        if not self._session_id:
+            return
+        try:
+            status = "completed" if self._state.status == AgentStatus.COMPLETED else "stopped"
+            await self._finish_session(status=status)
+        except Exception:
+            pass  # Ignore errors during cleanup
 
     def pause(self):
         """

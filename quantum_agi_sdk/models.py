@@ -209,6 +209,10 @@ class QuantumInferenceRequest(BaseModel):
     original_width: int = Field(..., gt=0)
     original_height: int = Field(..., gt=0)
     history: list[dict] = Field(default_factory=list)
+    model: Optional[str] = Field(
+        None,
+        description="Model to use for inference (e.g., 'anthropic/claude-sonnet-4-20250514', 'qwen/qwen-2.5-72b-instruct')",
+    )
 
 
 class QuantumInferenceResponse(BaseModel):

@@ -17,10 +17,11 @@ from PIL import Image
 API_URL = os.environ.get("AGI_API_BASE_URL", "http://localhost:8000")
 API_KEY = os.environ.get("USER_API_KEY", "f489f075-45fb-4e49-838c-054ff93728c3")
 
-# Models to test (using correct OpenRouter model IDs)
+# Models to test
 TEST_MODELS = [
     "anthropic/claude-sonnet-4",
     "openai/gpt-4o",
+    # "agi-inc/Qwen3-VL-32B-Instruct-L2-click-006",  # TODO: API-133
 ]
 
 

@@ -43,6 +43,7 @@ class CUAClient:
         self,
         api_url: str = "http://localhost:8000",
         api_key: Optional[str] = None,
+        model: Optional[str] = None,
         on_status_change: Optional[Callable[[AgentState], None]] = None,
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
         on_action_executed: Optional[Callable[[dict], None]] = None,
@@ -55,6 +56,7 @@ class CUAClient:
         Args:
             api_url: URL of the AGI cloud inference API
             api_key: API key for authentication
+            model: Model to use for inference (e.g., 'anthropic/claude-sonnet-4-20250514', 'qwen/qwen-2.5-72b-instruct')
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
             on_action_executed: Callback after each action is executed
@@ -63,6 +65,7 @@ class CUAClient:
         """
         self._api_url = api_url.rstrip("/")
         self._api_key = api_key
+        self._model = model
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required
         self._on_action_executed = on_action_executed
@@ -206,6 +209,7 @@ class CUAClient:
                 original_width=orig_width,
                 original_height=orig_height,
                 history=self._action_history[-10:],  # Last 10 actions for context
+                model=self._model,
             )
 
             response = await self._call_quantum_inference(request)

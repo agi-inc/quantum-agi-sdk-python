@@ -239,3 +239,17 @@ class FinishSessionResponse(BaseModel):
     status: str
     step_count: int
     finished_at: Optional[str] = None
+
+
+class InterruptRequest(BaseModel):
+    """Request to interrupt the agent with a user message"""
+
+    message: str = Field(..., description="User's interruption message")
+
+
+class InterruptResponse(BaseModel):
+    """Response from interrupting the agent"""
+
+    success: bool
+    message: Optional[str] = None
+    timestamp: Optional[str] = None

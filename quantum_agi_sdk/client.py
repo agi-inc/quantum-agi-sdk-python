@@ -24,6 +24,8 @@ from quantum_agi_sdk.models import (
     QuantumInferenceResponse,
     FinishSessionRequest,
     FinishSessionResponse,
+    InterruptRequest,
+    InterruptResponse,
 )
 
 
@@ -374,6 +376,35 @@ class CUAClient:
         except Exception:
             pass  # Ignore errors during cleanup
 
+    async def interrupt(self, message: str) -> InterruptResponse:
+        """
+        Send an interruption message to the agent.
+
+        This allows the user to modify, redirect, or correct the agent's behavior
+        in real-time while it is running.
+
+        Args:
+            message: The user's interruption message
+
+        Returns:
+            InterruptResponse indicating success/failure
+        """
+        if not self._session_id:
+            raise RuntimeError("No active session")
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        request = InterruptRequest(message=message)
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/interrupt",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        return InterruptResponse(**response.json())
+
     def pause(self):
         """
         Pause the agent execution.
@@ -472,6 +503,10 @@ class CUAClientSync:
 
     def confirm(self, confirmation_id: str, approved: bool = True):
         self._async_client.confirm(confirmation_id, approved)
+
+    def interrupt(self, message: str) -> InterruptResponse:
+        """Send an interruption message to the agent"""
+        return self._loop.run_until_complete(self._async_client.interrupt(message))
 
     @property
     def state(self) -> AgentState:

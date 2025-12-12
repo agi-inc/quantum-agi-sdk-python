@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  USER_API_KEY: ${{ secrets.USER_API_KEY }}
+  AGI_API_KEY: ${{ secrets.AGI_API_KEY }}
 
 jobs:
   test-development:

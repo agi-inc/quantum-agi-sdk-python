@@ -3,7 +3,7 @@
 Run with: pytest tests/test_inference_integration.py -v
 Configure via environment variables:
   - AGI_API_BASE_URL: API endpoint (default: http://localhost:8000)
-  - USER_API_KEY: API key for authentication
+  - AGI_API_KEY: API key for authentication
 """
 
 import base64
@@ -14,8 +14,8 @@ import httpx
 from PIL import Image
 
 # Test configuration from environment
-API_URL = os.environ.get("AGI_API_BASE_URL", "http://localhost:8000")
-API_KEY = os.environ.get("USER_API_KEY", "f489f075-45fb-4e49-838c-054ff93728c3")
+AGI_API_BASE_URL = os.environ.get("AGI_API_BASE_URL", "http://localhost:8000")
+AGI_API_KEY = os.environ.get("AGI_API_KEY", "")
 
 # Models to test
 TEST_MODELS = [
@@ -37,8 +37,8 @@ def generate_test_screenshot(width: int = 1000, height: int = 1000) -> str:
 def api_client():
     """Create an HTTP client for the API."""
     return httpx.Client(
-        base_url=API_URL,
-        headers={"Authorization": f"Bearer {API_KEY}"},
+        base_url=AGI_API_BASE_URL,
+        headers={"Authorization": f"Bearer {AGI_API_KEY}"},
         timeout=60.0,
     )
 

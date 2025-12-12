@@ -5,6 +5,7 @@ on:
     branches: [develop, production, main]
   pull_request:
     branches: [develop, production, main]
+  workflow_dispatch:
 
 env:
   USER_API_KEY: ${{ secrets.USER_API_KEY }}

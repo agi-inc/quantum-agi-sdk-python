@@ -1,5 +1,5 @@
 """
-Main CUA Client - The primary SDK interface
+Main AGI Client - The primary SDK interface
 """
 
 import asyncio
@@ -29,9 +29,9 @@ from quantum_agi_sdk.models import (
 )
 
 
-class CUAClient:
+class AGIClient:
     """
-    Computer Use Agent Client
+    AGI Client
 
     This is the main interface for the Quantum AGI SDK. It handles:
     - Task orchestration
@@ -53,7 +53,7 @@ class CUAClient:
         step_delay: float = 0.5,
     ):
         """
-        Initialize the CUA Client.
+        Initialize the AGI Client.
 
         Args:
             api_url: URL of the AGI cloud inference API
@@ -481,11 +481,11 @@ class CUAClient:
 
 
 # Synchronous wrapper for ease of use
-class CUAClientSync:
-    """Synchronous wrapper for CUAClient"""
+class AGIClientSync:
+    """Synchronous wrapper for AGIClient"""
 
     def __init__(self, *args, **kwargs):
-        self._async_client = CUAClient(*args, **kwargs)
+        self._async_client = AGIClient(*args, **kwargs)
         self._loop = asyncio.new_event_loop()
 
     def start(self, task: str, context: Optional[dict] = None) -> TaskResult:

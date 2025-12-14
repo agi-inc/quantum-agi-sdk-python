@@ -1,7 +1,7 @@
 """
 Qt Demo Application for Quantum AGI SDK
 
-A simple desktop application demonstrating the CUA SDK integration.
+A simple desktop application demonstrating the AGI SDK integration.
 """
 
 import asyncio
@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
 
-from quantum_agi_sdk import CUAClient, AgentState, AgentStatus, ConfirmationRequest, TaskResult
+from quantum_agi_sdk import AGIClient, AgentState, AgentStatus, ConfirmationRequest, TaskResult
 
 
 class AgentWorker(QObject):
@@ -41,7 +41,7 @@ class AgentWorker(QObject):
     def __init__(self, api_url: str):
         super().__init__()
         self._api_url = api_url
-        self._client: Optional[CUAClient] = None
+        self._client: Optional[AGIClient] = None
         self._task: Optional[str] = None
         self._context: Optional[dict] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -56,7 +56,7 @@ class AgentWorker(QObject):
         asyncio.set_event_loop(self._loop)
 
         try:
-            self._client = CUAClient(
+            self._client = AGIClient(
                 api_url=self._api_url,
                 on_status_change=lambda s: self.status_changed.emit(s),
                 on_confirmation_required=lambda c: self.confirmation_required.emit(c),
@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Quantum AGI CUA Demo")
+        self.setWindowTitle("Quantum AGI Demo")
         self.setMinimumSize(800, 600)
 
         self._worker: Optional[AgentWorker] = None

@@ -226,7 +226,6 @@ class QuantumInferenceResponse(BaseModel):
 class FinishSessionRequest(BaseModel):
     """Request to finish a session"""
 
-    status: Literal["finish", "fail"] = Field(default="finish", description="finish or fail")
     reason: Optional[str] = None
 
 

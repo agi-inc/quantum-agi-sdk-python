@@ -347,8 +347,8 @@ class AGIClient:
         response.raise_for_status()
         return QuantumInferenceResponse(**response.json())
 
-    async def _finish_session(self, status: str = "stopped", reason: Optional[str] = None) -> FinishSessionResponse:
-        """Finish the current session"""
+    async def _finish_session(self, reason: Optional[str] = None) -> FinishSessionResponse:
+        """Finish the current session successfully"""
         if not self._session_id:
             raise RuntimeError("No active session")
 
@@ -356,9 +356,28 @@ class AGIClient:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        request = FinishSessionRequest(status=status, reason=reason)
+        request = FinishSessionRequest(reason=reason)
         response = await self._http_client.post(
             f"{self._api_url}/v1/quantum/sessions/{self._session_id}/finish",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        self._session_id = None
+        return FinishSessionResponse(**response.json())
+
+    async def _fail_session(self, reason: Optional[str] = None) -> FinishSessionResponse:
+        """Fail the current session"""
+        if not self._session_id:
+            raise RuntimeError("No active session")
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        request = FinishSessionRequest(reason=reason)
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/fail",
             json=request.model_dump(),
             headers=headers,
         )
@@ -371,8 +390,10 @@ class AGIClient:
         if not self._session_id:
             return
         try:
-            status = "fail" if self._state.status == AgentStatus.FAIL else "finish"
-            await self._finish_session(status=status)
+            if self._state.status == AgentStatus.FAIL:
+                await self._fail_session()
+            else:
+                await self._finish_session()
         except Exception:
             pass  # Ignore errors during cleanup
 

@@ -347,7 +347,7 @@ class AGIClient:
         response.raise_for_status()
         return QuantumInferenceResponse(**response.json())
 
-    async def _finish_session(self, status: str = "stopped", reason: Optional[str] = None) -> FinishSessionResponse:
+    async def _finish_session(self, status: str = "finish", reason: Optional[str] = None) -> FinishSessionResponse:
         """Finish the current session"""
         if not self._session_id:
             raise RuntimeError("No active session")

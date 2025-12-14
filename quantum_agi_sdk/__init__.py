@@ -1,8 +1,8 @@
 """
-Quantum AGI SDK
+Quantum AGI SDK - Computer Use Agent for Quantum Integration
 """
 
-from quantum_agi_sdk.client import AGIClient
+from quantum_agi_sdk.client import CUAClient
 from quantum_agi_sdk.models import (
     Action,
     ActionType,
@@ -19,7 +19,7 @@ from quantum_agi_sdk.models import (
 __version__ = "0.1.0"
 
 __all__ = [
-    "AGIClient",
+    "CUAClient",
     "Action",
     "ActionType",
     "AgentState",

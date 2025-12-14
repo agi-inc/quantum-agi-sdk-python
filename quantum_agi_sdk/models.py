@@ -116,11 +116,10 @@ class AgentStatus(str, Enum):
 
     IDLE = "idle"
     RUNNING = "running"
-    PAUSED = "paused"
+    PAUSE = "pause"
     WAITING_CONFIRMATION = "waiting_confirmation"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    STOPPED = "stopped"
+    FINISH = "finish"
+    FAIL = "fail"
 
 
 class AgentState(BaseModel):
@@ -227,7 +226,7 @@ class QuantumInferenceResponse(BaseModel):
 class FinishSessionRequest(BaseModel):
     """Request to finish a session"""
 
-    status: str = Field(default="stopped", description="stopped, completed, or failed")
+    status: Literal["finish", "fail"] = Field(default="finish", description="finish or fail")
     reason: Optional[str] = None
 
 

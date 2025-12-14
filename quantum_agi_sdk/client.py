@@ -127,7 +127,7 @@ class CUAClient:
             return await self._run_task_loop(task, context)
         except Exception as e:
             self._update_state(
-                status=AgentStatus.FAILED,
+                status=AgentStatus.FAIL,
                 error=str(e),
             )
             return TaskResult(
@@ -179,7 +179,7 @@ class CUAClient:
                     # User denied confirmation
                     self._pending_confirmation = None
                     self._update_state(
-                        status=AgentStatus.STOPPED,
+                        status=AgentStatus.FINISH,
                         progress_message="User denied confirmation",
                     )
                     return TaskResult(
@@ -237,7 +237,7 @@ class CUAClient:
             # Check for task completion
             if action.get("type") == "done":
                 self._update_state(
-                    status=AgentStatus.COMPLETED,
+                    status=AgentStatus.FINISH,
                     progress_message=action.get("message", "Task completed successfully"),
                 )
                 return TaskResult(
@@ -250,7 +250,7 @@ class CUAClient:
             # Check for failure
             if action.get("type") == "fail":
                 self._update_state(
-                    status=AgentStatus.FAILED,
+                    status=AgentStatus.FAIL,
                     error=action.get("reason", "Unknown error"),
                 )
                 return TaskResult(
@@ -271,7 +271,7 @@ class CUAClient:
 
         # Max steps reached
         self._update_state(
-            status=AgentStatus.FAILED,
+            status=AgentStatus.FAIL,
             error="Maximum steps reached",
         )
         return TaskResult(
@@ -371,7 +371,7 @@ class CUAClient:
         if not self._session_id:
             return
         try:
-            status = "completed" if self._state.status == AgentStatus.COMPLETED else "stopped"
+            status = "fail" if self._state.status == AgentStatus.FAIL else "finish"
             await self._finish_session(status=status)
         except Exception:
             pass  # Ignore errors during cleanup
@@ -417,7 +417,7 @@ class CUAClient:
 
         self._paused = True
         self._update_state(
-            status=AgentStatus.PAUSED,
+            status=AgentStatus.PAUSE,
             progress_message="Agent paused",
         )
 
@@ -441,7 +441,7 @@ class CUAClient:
         self._running = False
         self._paused = False
         self._update_state(
-            status=AgentStatus.STOPPED,
+            status=AgentStatus.FINISH,
             progress_message="Agent stopped by user",
         )
         # Release any waiting confirmations

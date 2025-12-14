@@ -1,5 +1,5 @@
 """
-Main CUA Client - The primary SDK interface
+Main AGI Client - The primary SDK interface
 """
 
 import asyncio
@@ -18,12 +18,20 @@ from quantum_agi_sdk.models import (
     InferenceRequest,
     InferenceResponse,
     TaskResult,
+    StartSessionRequest,
+    StartSessionResponse,
+    QuantumInferenceRequest,
+    QuantumInferenceResponse,
+    FinishSessionRequest,
+    FinishSessionResponse,
+    InterruptRequest,
+    InterruptResponse,
 )
 
 
-class CUAClient:
+class AGIClient:
     """
-    Computer Use Agent Client
+    AGI Client
 
     This is the main interface for the Quantum AGI SDK. It handles:
     - Task orchestration
@@ -37,6 +45,7 @@ class CUAClient:
         self,
         api_url: str = "http://localhost:8000",
         api_key: Optional[str] = None,
+        model: Optional[str] = None,
         on_status_change: Optional[Callable[[AgentState], None]] = None,
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
         on_action_executed: Optional[Callable[[dict], None]] = None,
@@ -44,11 +53,12 @@ class CUAClient:
         step_delay: float = 0.5,
     ):
         """
-        Initialize the CUA Client.
+        Initialize the AGI Client.
 
         Args:
             api_url: URL of the AGI cloud inference API
             api_key: API key for authentication
+            model: Model to use for inference (e.g., 'anthropic/claude-sonnet-4-20250514', 'qwen/qwen-2.5-72b-instruct')
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
             on_action_executed: Callback after each action is executed
@@ -57,6 +67,7 @@ class CUAClient:
         """
         self._api_url = api_url.rstrip("/")
         self._api_key = api_key
+        self._model = model
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required
         self._on_action_executed = on_action_executed
@@ -75,6 +86,7 @@ class CUAClient:
         self._confirmed = False
         self._action_history: list[dict] = []
         self._task_start_time: Optional[float] = None
+        self._session_id: Optional[str] = None  # Track current session ID
 
     @property
     def state(self) -> AgentState:
@@ -115,7 +127,7 @@ class CUAClient:
             return await self._run_task_loop(task, context)
         except Exception as e:
             self._update_state(
-                status=AgentStatus.FAILED,
+                status=AgentStatus.FAIL,
                 error=str(e),
             )
             return TaskResult(
@@ -131,6 +143,21 @@ class CUAClient:
         """Main task execution loop"""
         step = 0
 
+        # Start a session with the API
+        try:
+            session = await self._start_session(task, context)
+            self._session_id = session.id
+        except Exception as e:
+            raise RuntimeError(f"Failed to start session: {e}")
+
+        try:
+            return await self._execute_task_loop(task, context, step)
+        finally:
+            # Always finish the session
+            await self._finish_session_safe()
+
+    async def _execute_task_loop(self, task: str, context: Optional[dict], step: int) -> TaskResult:
+        """Execute the task loop after session is started"""
         while step < self._max_steps and self._running:
             # Check if paused
             while self._paused and self._running:
@@ -152,7 +179,7 @@ class CUAClient:
                     # User denied confirmation
                     self._pending_confirmation = None
                     self._update_state(
-                        status=AgentStatus.STOPPED,
+                        status=AgentStatus.FINISH,
                         progress_message="User denied confirmation",
                     )
                     return TaskResult(
@@ -179,17 +206,15 @@ class CUAClient:
             screenshot_b64, orig_width, orig_height = self._capture.capture_scaled()
 
             # Get next action from cloud inference
-            request = InferenceRequest(
-                task=task,
+            request = QuantumInferenceRequest(
                 screenshot_base64=screenshot_b64,
                 original_width=orig_width,
                 original_height=orig_height,
-                context=context,
                 history=self._action_history[-10:],  # Last 10 actions for context
-                step_number=step,
+                model=self._model,
             )
 
-            response = await self._call_inference(request)
+            response = await self._call_quantum_inference(request)
 
             # Process the action
             action = response.action
@@ -212,7 +237,7 @@ class CUAClient:
             # Check for task completion
             if action.get("type") == "done":
                 self._update_state(
-                    status=AgentStatus.COMPLETED,
+                    status=AgentStatus.FINISH,
                     progress_message=action.get("message", "Task completed successfully"),
                 )
                 return TaskResult(
@@ -225,7 +250,7 @@ class CUAClient:
             # Check for failure
             if action.get("type") == "fail":
                 self._update_state(
-                    status=AgentStatus.FAILED,
+                    status=AgentStatus.FAIL,
                     error=action.get("reason", "Unknown error"),
                 )
                 return TaskResult(
@@ -246,7 +271,7 @@ class CUAClient:
 
         # Max steps reached
         self._update_state(
-            status=AgentStatus.FAILED,
+            status=AgentStatus.FAIL,
             error="Maximum steps reached",
         )
         return TaskResult(
@@ -276,7 +301,7 @@ class CUAClient:
             self._on_action_executed(action)
 
     async def _call_inference(self, request: InferenceRequest) -> InferenceResponse:
-        """Call the cloud inference API"""
+        """Call the cloud inference API (legacy endpoint)"""
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -290,6 +315,96 @@ class CUAClient:
 
         return InferenceResponse(**response.json())
 
+    async def _start_session(self, task: str, context: Optional[dict]) -> StartSessionResponse:
+        """Start a quantum agent session"""
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        request = StartSessionRequest(task=task, context=context)
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        return StartSessionResponse(**response.json())
+
+    async def _call_quantum_inference(self, request: QuantumInferenceRequest) -> QuantumInferenceResponse:
+        """Call the quantum inference endpoint"""
+        if not self._session_id:
+            raise RuntimeError("No active session")
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/inference",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        return QuantumInferenceResponse(**response.json())
+
+    async def _finish_session(self, status: str = "stopped", reason: Optional[str] = None) -> FinishSessionResponse:
+        """Finish the current session"""
+        if not self._session_id:
+            raise RuntimeError("No active session")
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        request = FinishSessionRequest(status=status, reason=reason)
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/finish",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        self._session_id = None
+        return FinishSessionResponse(**response.json())
+
+    async def _finish_session_safe(self):
+        """Safely finish the session, ignoring errors"""
+        if not self._session_id:
+            return
+        try:
+            status = "fail" if self._state.status == AgentStatus.FAIL else "finish"
+            await self._finish_session(status=status)
+        except Exception:
+            pass  # Ignore errors during cleanup
+
+    async def interrupt(self, message: str) -> InterruptResponse:
+        """
+        Send an interruption message to the agent.
+
+        This allows the user to modify, redirect, or correct the agent's behavior
+        in real-time while it is running.
+
+        Args:
+            message: The user's interruption message
+
+        Returns:
+            InterruptResponse indicating success/failure
+        """
+        if not self._session_id:
+            raise RuntimeError("No active session")
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        request = InterruptRequest(message=message)
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/interrupt",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        return InterruptResponse(**response.json())
+
     def pause(self):
         """
         Pause the agent execution.
@@ -302,7 +417,7 @@ class CUAClient:
 
         self._paused = True
         self._update_state(
-            status=AgentStatus.PAUSED,
+            status=AgentStatus.PAUSE,
             progress_message="Agent paused",
         )
 
@@ -326,7 +441,7 @@ class CUAClient:
         self._running = False
         self._paused = False
         self._update_state(
-            status=AgentStatus.STOPPED,
+            status=AgentStatus.FINISH,
             progress_message="Agent stopped by user",
         )
         # Release any waiting confirmations
@@ -366,11 +481,11 @@ class CUAClient:
 
 
 # Synchronous wrapper for ease of use
-class CUAClientSync:
-    """Synchronous wrapper for CUAClient"""
+class AGIClientSync:
+    """Synchronous wrapper for AGIClient"""
 
     def __init__(self, *args, **kwargs):
-        self._async_client = CUAClient(*args, **kwargs)
+        self._async_client = AGIClient(*args, **kwargs)
         self._loop = asyncio.new_event_loop()
 
     def start(self, task: str, context: Optional[dict] = None) -> TaskResult:
@@ -388,6 +503,10 @@ class CUAClientSync:
 
     def confirm(self, confirmation_id: str, approved: bool = True):
         self._async_client.confirm(confirmation_id, approved)
+
+    def interrupt(self, message: str) -> InterruptResponse:
+        """Send an interruption message to the agent"""
+        return self._loop.run_until_complete(self._async_client.interrupt(message))
 
     @property
     def state(self) -> AgentState:

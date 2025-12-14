@@ -3,7 +3,7 @@ Basic usage example for the Quantum AGI SDK
 """
 
 import asyncio
-from quantum_agi_sdk import CUAClient, AgentState, AgentStatus
+from quantum_agi_sdk import AGIClient, AgentState, AgentStatus
 
 
 def on_status_change(state: AgentState):
@@ -11,11 +11,10 @@ def on_status_change(state: AgentState):
     status_emoji = {
         AgentStatus.IDLE: "⏸️",
         AgentStatus.RUNNING: "🏃",
-        AgentStatus.PAUSED: "⏸️",
+        AgentStatus.PAUSE: "⏸️",
         AgentStatus.WAITING_CONFIRMATION: "❓",
-        AgentStatus.COMPLETED: "✅",
-        AgentStatus.FAILED: "❌",
-        AgentStatus.STOPPED: "🛑",
+        AgentStatus.FINISH: "✅",
+        AgentStatus.FAIL: "❌",
     }
     emoji = status_emoji.get(state.status, "")
     print(f"{emoji} [{state.status.value}] Step {state.current_step}: {state.progress_message}")
@@ -56,7 +55,7 @@ async def main():
     print("=" * 50)
 
     # Create the client
-    client = CUAClient(
+    client = AGIClient(
         api_url="http://localhost:8000",  # Cloud inference server
         on_status_change=on_status_change,
         on_action_executed=on_action_executed,

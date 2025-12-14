@@ -11,11 +11,11 @@ This SDK enables Quantum to orchestrate an AI agent that can control a PC to com
 ```
 Quantum (intent + context + memory)
          ↓ start(task)
-CUA SDK (local device agent)
+AGI SDK (local device agent)
          ↓ enters task loop
 Agent Step (screenshot → cloud inference → action JSON)
          ↓
-CUA SDK (executes action locally)
+AGI SDK (executes action locally)
          ↓
 Repeat until task completion or confirmation needed
 ```
@@ -30,7 +30,7 @@ pip install quantum-agi-sdk
 
 ```python
 import asyncio
-from quantum_agi_sdk import CUAClient, AgentState
+from quantum_agi_sdk import AGIClient, AgentState
 
 def on_status_change(state: AgentState):
     print(f"Status: {state.status} - {state.progress_message}")
@@ -41,7 +41,7 @@ def on_confirmation(confirmation):
     client.confirm(confirmation.id, approved=True)
 
 async def main():
-    client = CUAClient(
+    client = AGIClient(
         api_url="http://localhost:8000",
         on_status_change=on_status_change,
         on_confirmation_required=on_confirmation,
@@ -62,19 +62,19 @@ asyncio.run(main())
 
 ### Core Components
 
-- **CUAClient**: Main orchestration client
+- **AGIClient**: Main orchestration client
 - **ScreenCapture**: Screenshot capture with 1000x1000 scaling
 - **ActionExecutor**: Local action execution (click, type, scroll, etc.)
 - **Models**: Pydantic models for actions, states, and API contracts
 
-### CUAClient
+### AGIClient
 
 The main interface for the SDK.
 
 #### Constructor
 
 ```python
-CUAClient(
+AGIClient(
     api_url: str = "http://localhost:8000",
     api_key: Optional[str] = None,
     on_status_change: Optional[Callable[[AgentState], None]] = None,

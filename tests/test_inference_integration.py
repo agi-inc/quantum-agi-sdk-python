@@ -66,7 +66,7 @@ def session_id(api_client):
     try:
         api_client.post(
             f"/v1/quantum/sessions/{session['id']}/finish",
-            json={"status": "finish", "reason": "Test completed"},
+            json={"reason": "Test completed"},
         )
     except Exception:
         pass
@@ -121,7 +121,7 @@ class TestInferenceIntegration:
             # Cleanup
             api_client.post(
                 f"/v1/quantum/sessions/{session_id}/finish",
-                json={"status": "finish"},
+                json={},
             )
 
     def test_inference_without_model_uses_default(self, api_client, test_screenshot, session_id):

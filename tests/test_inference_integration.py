@@ -19,9 +19,10 @@ AGI_API_KEY = os.environ.get("AGI_API_KEY", "")
 
 # Models to test
 TEST_MODELS = [
-    "anthropic/claude-sonnet-4",
-    "openai/gpt-4o",
-    "openrouter/qwen/qwen3-vl-235b-a22b-instruct",
+    "anthropic/claude-sonnet-4.5",
+    "anthropic/claude-opus-4.5",
+    "openai/gpt-5.1-codex-mini",
+    "qwen/qwen3-vl-235b-a22b-instruct",
     # "agi-inc/Qwen3-VL-32B-Instruct-L2-click-006",  # TODO: API-133
 ]
 

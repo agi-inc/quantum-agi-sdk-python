@@ -15,6 +15,7 @@ from quantum_agi_sdk.models import (
     AgentState,
     AgentStatus,
     ConfirmationRequest,
+    QuestionRequest,
     TaskResult,
     StartSessionRequest,
     StartSessionResponse,
@@ -24,6 +25,8 @@ from quantum_agi_sdk.models import (
     FinishSessionResponse,
     InterruptRequest,
     InterruptResponse,
+    AnswerQuestionRequest,
+    AnswerQuestionResponse,
 )
 
 
@@ -45,6 +48,7 @@ class AGIClient:
         api_key: Optional[str] = None,
         on_status_change: Optional[Callable[[AgentState], None]] = None,
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
+        on_question_required: Optional[Callable[[QuestionRequest], None]] = None,
         on_action_executed: Optional[Callable[[dict], None]] = None,
         max_steps: int = 100,
         step_delay: float = 0.5,
@@ -57,6 +61,7 @@ class AGIClient:
             api_key: API key for authentication
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
+            on_question_required: Callback when agent asks a question requiring user input
             on_action_executed: Callback after each action is executed
             max_steps: Maximum steps before stopping
             step_delay: Delay between steps in seconds
@@ -65,6 +70,7 @@ class AGIClient:
         self._api_key = api_key
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required
+        self._on_question_required = on_question_required
         self._on_action_executed = on_action_executed
         self._max_steps = max_steps
         self._step_delay = step_delay
@@ -79,6 +85,9 @@ class AGIClient:
         self._pending_confirmation: Optional[ConfirmationRequest] = None
         self._confirmation_event = asyncio.Event()
         self._confirmed = False
+        self._pending_question: Optional[QuestionRequest] = None
+        self._question_event = asyncio.Event()
+        self._answer: Optional[str] = None
         self._action_history: list[dict] = []
         self._task_start_time: Optional[float] = None
         self._session_id: Optional[str] = None
@@ -177,6 +186,38 @@ class AGIClient:
                 self._update_state(status=AgentStatus.RUNNING)
                 continue
 
+            if self._pending_question:
+                self._update_state(
+                    status=AgentStatus.WAITING_QUESTION_ANSWER,
+                    progress_message=f"Waiting for answer: {self._pending_question.question}",
+                )
+                await self._question_event.wait()
+                self._question_event.clear()
+
+                if self._answer is None:
+                    self._pending_question = None
+                    self._update_state(
+                        status=AgentStatus.FINISH,
+                        progress_message="User cancelled question",
+                    )
+                    return TaskResult(
+                        success=False,
+                        message="User cancelled question",
+                        steps_taken=step,
+                        duration_seconds=time.time() - self._task_start_time,
+                    )
+
+                # Submit the answer to the server
+                try:
+                    await self._answer_question(self._pending_question.id, self._answer)
+                except Exception as e:
+                    print(f"Warning: Failed to submit answer: {e}")
+
+                self._pending_question = None
+                self._answer = None
+                self._update_state(status=AgentStatus.RUNNING)
+                continue
+
             step += 1
             self._update_state(
                 current_step=step,
@@ -208,6 +249,17 @@ class AGIClient:
                 )
                 if self._on_confirmation_required:
                     self._on_confirmation_required(self._pending_confirmation)
+                continue
+
+            # Check if a question is being asked
+            if action.get("type") == "ask_question":
+                self._pending_question = QuestionRequest(
+                    id=str(uuid.uuid4()),
+                    question=action.get("question", "Please provide input"),
+                    context=action.get("context"),
+                )
+                if self._on_question_required:
+                    self._on_question_required(self._pending_question)
                 continue
 
             # Check for task completion
@@ -377,6 +429,8 @@ class AGIClient:
         self._update_state(status=AgentStatus.FINISH, progress_message="Agent stopped by user")
         self._confirmed = False
         self._confirmation_event.set()
+        self._answer = None
+        self._question_event.set()
 
     def confirm(self, confirmation_id: str, approved: bool = True):
         """Respond to a confirmation request."""
@@ -386,6 +440,36 @@ class AGIClient:
             return
         self._confirmed = approved
         self._confirmation_event.set()
+
+    def answer(self, question_id: str, answer: Optional[str]):
+        """Submit an answer to a question from the agent.
+
+        Pass None as answer to cancel the question.
+        """
+        if not self._pending_question:
+            return
+        if self._pending_question.id != question_id:
+            return
+        self._answer = answer
+        self._question_event.set()
+
+    async def _answer_question(self, question_id: str, answer: str) -> AnswerQuestionResponse:
+        """Submit an answer to the server for a question the agent asked."""
+        if not self._session_id:
+            raise RuntimeError("No active session")
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        request = AnswerQuestionRequest(question_id=question_id, answer=answer)
+        response = await self._http_client.post(
+            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/answer",
+            json=request.model_dump(),
+            headers=headers,
+        )
+        response.raise_for_status()
+        return AnswerQuestionResponse(**response.json())
 
     def _update_state(self, **kwargs):
         """Update agent state and notify listeners"""
@@ -422,6 +506,9 @@ class AGIClientSync:
 
     def confirm(self, confirmation_id: str, approved: bool = True):
         self._async_client.confirm(confirmation_id, approved)
+
+    def answer(self, question_id: str, answer: Optional[str]):
+        self._async_client.answer(question_id, answer)
 
     def interrupt(self, message: str) -> InterruptResponse:
         return self._loop.run_until_complete(self._async_client.interrupt(message))

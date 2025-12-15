@@ -198,11 +198,33 @@ class StartSessionResponse(BaseModel):
     created_at: Optional[str] = None
 
 
+class ImageUrlContent(BaseModel):
+    """Image URL content block"""
+
+    type: Literal["image_url"] = "image_url"
+    image_url: dict = Field(..., description="Object with 'url' key containing data URL")
+
+
+class TextContent(BaseModel):
+    """Text content block"""
+
+    type: Literal["text"] = "text"
+    text: str
+
+
+class LLMMessage(BaseModel):
+    """Standard LLM message format"""
+
+    role: Literal["user", "assistant"]
+    content: Union[str, list[dict]] = Field(..., description="String or list of content blocks")
+    tool_calls: Optional[list[dict]] = Field(default=None, description="Tool calls for assistant messages")
+
+
 class QuantumInferenceRequest(BaseModel):
     """Request for quantum inference step"""
 
-    screenshots: list[str] = Field(..., description="Up to 4 base64-encoded PNG screenshots in chronological order")
-    history: list[dict] = Field(default_factory=list)
+    messages: list[dict] = Field(..., description="Conversation history in standard LLM message format")
+    model: Optional[str] = Field(default=None, description="Model to use for inference")
 
 
 class QuantumInferenceResponse(BaseModel):

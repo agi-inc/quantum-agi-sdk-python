@@ -41,9 +41,8 @@ class AGIClient:
 
     def __init__(
         self,
-        api_url: str = "http://localhost:8000",
+        api_url: str = "https://api.agi.tech",
         api_key: Optional[str] = None,
-        model: Optional[str] = None,
         on_status_change: Optional[Callable[[AgentState], None]] = None,
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
         on_action_executed: Optional[Callable[[dict], None]] = None,
@@ -56,7 +55,6 @@ class AGIClient:
         Args:
             api_url: URL of the AGI cloud inference API
             api_key: API key for authentication
-            model: Model to use for inference
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
             on_action_executed: Callback after each action is executed
@@ -65,7 +63,6 @@ class AGIClient:
         """
         self._api_url = api_url.rstrip("/")
         self._api_key = api_key
-        self._model = model
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required
         self._on_action_executed = on_action_executed
@@ -193,7 +190,6 @@ class AGIClient:
             request = QuantumInferenceRequest(
                 screenshot_base64=screenshot_b64,
                 history=self._action_history[-10:],
-                model=self._model,
             )
 
             response = await self._call_quantum_inference(request)

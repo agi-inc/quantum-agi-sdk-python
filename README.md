@@ -50,7 +50,7 @@ def on_confirmation(confirmation):
 
 async def main():
     client = AGIClient(
-        api_url="http://localhost:8000",
+        api_url="https://api.agi.tech",
         on_status_change=on_status_change,
         on_confirmation_required=on_confirmation,
     )
@@ -85,9 +85,8 @@ The main interface for the SDK.
 
 ```python
 AGIClient(
-    api_url: str = "http://localhost:8000",
+    api_url: str = "https://api.agi.tech",
     api_key: Optional[str] = None,
-    model: Optional[str] = None,
     on_status_change: Optional[Callable[[AgentState], None]] = None,
     on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
     on_action_executed: Optional[Callable[[dict], None]] = None,
@@ -97,9 +96,8 @@ AGIClient(
 ```
 
 **Parameters:**
-- `api_url`: URL of the AGI cloud inference API (default: "http://localhost:8000")
+- `api_url`: URL of the AGI cloud inference API (default: "https://api.agi.tech")
 - `api_key`: Optional API key for authentication
-- `model`: Optional model to use for inference (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o")
 - `on_status_change`: Callback function called when agent status changes
 - `on_confirmation_required`: Callback function called when user confirmation is needed
 - `on_action_executed`: Callback function called after each action is executed
@@ -188,13 +186,10 @@ You can configure the SDK using environment variables:
 
 ```bash
 # API endpoint
-export QUANTUM_AGI_API_URL="http://localhost:8000"
+export QUANTUM_AGI_API_URL="https://api.agi.tech"
 
 # API key (if required)
 export QUANTUM_AGI_API_KEY="your-api-key"
-
-# Preferred model
-export QUANTUM_AGI_MODEL="anthropic/claude-sonnet-4"
 ```
 
 ### Context Object
@@ -275,7 +270,7 @@ def on_action_executed(action: dict):
         print(f"Typed: {action['text']}")
 
 client = AGIClient(
-    api_url="http://localhost:8000",
+    api_url="https://api.agi.tech",
     on_status_change=on_status_change,
     on_action_executed=on_action_executed,
 )

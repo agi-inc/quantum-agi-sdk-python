@@ -184,10 +184,6 @@ class QuantumInferenceRequest(BaseModel):
 
     screenshot_base64: str = Field(..., description="Base64-encoded PNG screenshot")
     history: list[dict] = Field(default_factory=list)
-    model: Optional[str] = Field(
-        None,
-        description="Model to use for inference (e.g., 'anthropic/claude-sonnet-4', 'openai/gpt-4o')",
-    )
 
 
 class QuantumInferenceResponse(BaseModel):

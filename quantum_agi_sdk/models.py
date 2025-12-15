@@ -20,9 +20,10 @@ class ActionType(str, Enum):
     DRAG = "drag"
     WAIT = "wait"
     SCREENSHOT = "screenshot"
-    DONE = "done"
+    FINISH = "finish"
     FAIL = "fail"
     CONFIRM = "confirm"
+    ASK_QUESTION = "ask_question"
 
 
 class ClickAction(BaseModel):
@@ -75,10 +76,10 @@ class WaitAction(BaseModel):
     duration: float = Field(default=1.0, description="Duration in seconds")
 
 
-class DoneAction(BaseModel):
+class FinishAction(BaseModel):
     """Task completed successfully"""
 
-    type: Literal["done"] = "done"
+    type: Literal["finish"] = "finish"
     message: str = Field(default="", description="Completion message")
 
 
@@ -98,6 +99,14 @@ class ConfirmAction(BaseModel):
     pending_action: dict = Field(..., description="The action to execute after confirmation")
 
 
+class AskQuestionAction(BaseModel):
+    """Ask the user a question and wait for their text response"""
+
+    type: Literal["ask_question"] = "ask_question"
+    question: str = Field(..., description="The question to ask the user")
+    context: Optional[str] = Field(default=None, description="Optional context explaining why this information is needed")
+
+
 Action = Union[
     ClickAction,
     TypeAction,
@@ -105,9 +114,10 @@ Action = Union[
     ScrollAction,
     DragAction,
     WaitAction,
-    DoneAction,
+    FinishAction,
     FailAction,
     ConfirmAction,
+    AskQuestionAction,
 ]
 
 
@@ -118,6 +128,7 @@ class AgentStatus(str, Enum):
     RUNNING = "running"
     PAUSE = "pause"
     WAITING_CONFIRMATION = "waiting_confirmation"
+    WAITING_QUESTION_ANSWER = "waiting_question_answer"
     FINISH = "finish"
     FAIL = "fail"
 
@@ -142,6 +153,14 @@ class ConfirmationRequest(BaseModel):
     impact_level: str
     pending_action: dict
     context: Optional[dict] = None
+
+
+class QuestionRequest(BaseModel):
+    """Request for user to answer a question"""
+
+    id: str
+    question: str
+    context: Optional[str] = None
 
 
 class TaskResult(BaseModel):
@@ -221,6 +240,21 @@ class InterruptRequest(BaseModel):
 
 class InterruptResponse(BaseModel):
     """Response from interrupting the agent"""
+
+    success: bool
+    message: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+class AnswerQuestionRequest(BaseModel):
+    """Request to answer a question from the agent"""
+
+    question_id: str = Field(..., description="ID of the question being answered")
+    answer: str = Field(..., description="User's answer to the question")
+
+
+class AnswerQuestionResponse(BaseModel):
+    """Response from answering a question"""
 
     success: bool
     message: Optional[str] = None

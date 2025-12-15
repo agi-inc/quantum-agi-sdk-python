@@ -129,7 +129,7 @@ The agent can perform these actions:
 | `drag` | Drag from point to point | `start_x`, `start_y`, `end_x`, `end_y` |
 | `wait` | Wait for duration | `duration` (seconds) |
 | `screenshot` | Take a screenshot | - |
-| `done` | Task completed | `message` |
+| `finish` | Task completed | `message` |
 | `fail` | Task failed | `reason` |
 | `confirm` | Request user confirmation | `action_description`, `impact_level`, `pending_action` |
 

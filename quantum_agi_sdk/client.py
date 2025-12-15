@@ -5,18 +5,16 @@ Main AGI Client - The primary SDK interface
 import asyncio
 import time
 import uuid
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import httpx
 
-from quantum_agi_sdk.capture import ScreenCapture, scale_action_coordinates
+from quantum_agi_sdk.capture import ScreenCapture
 from quantum_agi_sdk.executor import ActionExecutor
 from quantum_agi_sdk.models import (
     AgentState,
     AgentStatus,
     ConfirmationRequest,
-    InferenceRequest,
-    InferenceResponse,
     TaskResult,
     StartSessionRequest,
     StartSessionResponse,
@@ -35,7 +33,7 @@ class AGIClient:
 
     This is the main interface for the Quantum AGI SDK. It handles:
     - Task orchestration
-    - Screenshot capture and scaling
+    - Screenshot capture
     - Cloud inference communication
     - Local action execution
     - Confirmation flow for high-impact actions
@@ -58,7 +56,7 @@ class AGIClient:
         Args:
             api_url: URL of the AGI cloud inference API
             api_key: API key for authentication
-            model: Model to use for inference (e.g., 'anthropic/claude-sonnet-4-20250514', 'qwen/qwen-2.5-72b-instruct')
+            model: Model to use for inference
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
             on_action_executed: Callback after each action is executed
@@ -86,7 +84,7 @@ class AGIClient:
         self._confirmed = False
         self._action_history: list[dict] = []
         self._task_start_time: Optional[float] = None
-        self._session_id: Optional[str] = None  # Track current session ID
+        self._session_id: Optional[str] = None
 
     @property
     def state(self) -> AgentState:
@@ -97,13 +95,9 @@ class AGIClient:
         """
         Start executing a task.
 
-        This is the main entry point. Call this method with the user's intent
-        from Quantum and the agent will execute until completion, failure,
-        or user intervention.
-
         Args:
-            task: The task/intent from Quantum (e.g., "Book a flight to NYC")
-            context: Optional context from Quantum (user preferences, memories, etc.)
+            task: The task/intent from Quantum
+            context: Optional context
 
         Returns:
             TaskResult with success status and details
@@ -126,10 +120,7 @@ class AGIClient:
         try:
             return await self._run_task_loop(task, context)
         except Exception as e:
-            self._update_state(
-                status=AgentStatus.FAIL,
-                error=str(e),
-            )
+            self._update_state(status=AgentStatus.FAIL, error=str(e))
             return TaskResult(
                 success=False,
                 message=f"Task failed: {str(e)}",
@@ -141,9 +132,6 @@ class AGIClient:
 
     async def _run_task_loop(self, task: str, context: Optional[dict]) -> TaskResult:
         """Main task execution loop"""
-        step = 0
-
-        # Start a session with the API
         try:
             session = await self._start_session(task, context)
             self._session_id = session.id
@@ -151,22 +139,20 @@ class AGIClient:
             raise RuntimeError(f"Failed to start session: {e}")
 
         try:
-            return await self._execute_task_loop(task, context, step)
+            return await self._execute_task_loop(task, context)
         finally:
-            # Always finish the session
             await self._finish_session_safe()
 
-    async def _execute_task_loop(self, task: str, context: Optional[dict], step: int) -> TaskResult:
+    async def _execute_task_loop(self, task: str, context: Optional[dict]) -> TaskResult:
         """Execute the task loop after session is started"""
+        step = 0
         while step < self._max_steps and self._running:
-            # Check if paused
             while self._paused and self._running:
                 await asyncio.sleep(0.1)
 
             if not self._running:
                 break
 
-            # Wait for any pending confirmation
             if self._pending_confirmation:
                 self._update_state(
                     status=AgentStatus.WAITING_CONFIRMATION,
@@ -176,7 +162,6 @@ class AGIClient:
                 self._confirmation_event.clear()
 
                 if not self._confirmed:
-                    # User denied confirmation
                     self._pending_confirmation = None
                     self._update_state(
                         status=AgentStatus.FINISH,
@@ -189,9 +174,8 @@ class AGIClient:
                         duration_seconds=time.time() - self._task_start_time,
                     )
 
-                # Execute the confirmed action
                 if self._pending_confirmation.pending_action:
-                    await self._execute_action(self._pending_confirmation.pending_action)
+                    await self._run_action(self._pending_confirmation.pending_action)
                 self._pending_confirmation = None
                 self._update_state(status=AgentStatus.RUNNING)
                 continue
@@ -203,20 +187,16 @@ class AGIClient:
             )
 
             # Capture screenshot
-            screenshot_b64, orig_width, orig_height = self._capture.capture_scaled()
+            screenshot_b64 = self._capture.capture()
 
             # Get next action from cloud inference
             request = QuantumInferenceRequest(
                 screenshot_base64=screenshot_b64,
-                original_width=orig_width,
-                original_height=orig_height,
-                history=self._action_history[-10:],  # Last 10 actions for context
+                history=self._action_history[-10:],
                 model=self._model,
             )
 
             response = await self._call_quantum_inference(request)
-
-            # Process the action
             action = response.action
 
             # Check if confirmation is required
@@ -261,19 +241,11 @@ class AGIClient:
                 )
 
             # Execute the action
-            await self._execute_action(action, orig_width, orig_height)
-
-            # Record action in history
+            await self._run_action(action)
             self._action_history.append(action)
-
-            # Delay between steps
             await asyncio.sleep(self._step_delay)
 
-        # Max steps reached
-        self._update_state(
-            status=AgentStatus.FAIL,
-            error="Maximum steps reached",
-        )
+        self._update_state(status=AgentStatus.FAIL, error="Maximum steps reached")
         return TaskResult(
             success=False,
             message="Maximum steps reached without completing task",
@@ -281,39 +253,12 @@ class AGIClient:
             duration_seconds=time.time() - self._task_start_time,
         )
 
-    async def _execute_action(
-        self,
-        action: dict,
-        orig_width: Optional[int] = None,
-        orig_height: Optional[int] = None,
-    ):
+    async def _run_action(self, action: dict):
         """Execute a single action"""
-        # Scale coordinates if needed
-        if orig_width and orig_height:
-            action = scale_action_coordinates(action, orig_width, orig_height)
-
         self._update_state(last_action=action)
-
-        # Execute locally
         self._executor.execute(action)
-
         if self._on_action_executed:
             self._on_action_executed(action)
-
-    async def _call_inference(self, request: InferenceRequest) -> InferenceResponse:
-        """Call the cloud inference API (legacy endpoint)"""
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-
-        response = await self._http_client.post(
-            f"{self._api_url}/v1/inference",
-            json=request.model_dump(),
-            headers=headers,
-        )
-        response.raise_for_status()
-
-        return InferenceResponse(**response.json())
 
     async def _start_session(self, task: str, context: Optional[dict]) -> StartSessionResponse:
         """Start a quantum agent session"""
@@ -395,21 +340,10 @@ class AGIClient:
             else:
                 await self._finish_session()
         except Exception:
-            pass  # Ignore errors during cleanup
+            pass
 
     async def interrupt(self, message: str) -> InterruptResponse:
-        """
-        Send an interruption message to the agent.
-
-        This allows the user to modify, redirect, or correct the agent's behavior
-        in real-time while it is running.
-
-        Args:
-            message: The user's interruption message
-
-        Returns:
-            InterruptResponse indicating success/failure
-        """
+        """Send an interruption message to the agent."""
         if not self._session_id:
             raise RuntimeError("No active session")
 
@@ -427,62 +361,33 @@ class AGIClient:
         return InterruptResponse(**response.json())
 
     def pause(self):
-        """
-        Pause the agent execution.
-
-        The agent will complete the current action and then wait.
-        Call resume() to continue.
-        """
+        """Pause the agent execution."""
         if not self._running:
             return
-
         self._paused = True
-        self._update_state(
-            status=AgentStatus.PAUSE,
-            progress_message="Agent paused",
-        )
+        self._update_state(status=AgentStatus.PAUSE, progress_message="Agent paused")
 
     def resume(self):
         """Resume a paused agent"""
         if not self._running:
             return
-
         self._paused = False
-        self._update_state(
-            status=AgentStatus.RUNNING,
-            progress_message="Agent resumed",
-        )
+        self._update_state(status=AgentStatus.RUNNING, progress_message="Agent resumed")
 
     def stop(self):
-        """
-        Stop the agent execution completely.
-
-        This will abort the current task.
-        """
+        """Stop the agent execution completely."""
         self._running = False
         self._paused = False
-        self._update_state(
-            status=AgentStatus.FINISH,
-            progress_message="Agent stopped by user",
-        )
-        # Release any waiting confirmations
+        self._update_state(status=AgentStatus.FINISH, progress_message="Agent stopped by user")
         self._confirmed = False
         self._confirmation_event.set()
 
     def confirm(self, confirmation_id: str, approved: bool = True):
-        """
-        Respond to a confirmation request.
-
-        Args:
-            confirmation_id: ID of the confirmation request
-            approved: True to approve, False to deny
-        """
+        """Respond to a confirmation request."""
         if not self._pending_confirmation:
             return
-
         if self._pending_confirmation.id != confirmation_id:
             return
-
         self._confirmed = approved
         self._confirmation_event.set()
 
@@ -491,7 +396,6 @@ class AGIClient:
         for key, value in kwargs.items():
             if hasattr(self._state, key):
                 setattr(self._state, key, value)
-
         if self._on_status_change:
             self._on_status_change(self._state)
 
@@ -501,7 +405,6 @@ class AGIClient:
         self._capture.close()
 
 
-# Synchronous wrapper for ease of use
 class AGIClientSync:
     """Synchronous wrapper for AGIClient"""
 
@@ -510,7 +413,6 @@ class AGIClientSync:
         self._loop = asyncio.new_event_loop()
 
     def start(self, task: str, context: Optional[dict] = None) -> TaskResult:
-        """Start a task synchronously"""
         return self._loop.run_until_complete(self._async_client.start(task, context))
 
     def pause(self):
@@ -526,7 +428,6 @@ class AGIClientSync:
         self._async_client.confirm(confirmation_id, approved)
 
     def interrupt(self, message: str) -> InterruptResponse:
-        """Send an interruption message to the agent"""
         return self._loop.run_until_complete(self._async_client.interrupt(message))
 
     @property

@@ -29,8 +29,8 @@ class ClickAction(BaseModel):
     """Click action at specific coordinates"""
 
     type: Literal["click", "double_click", "right_click"]
-    x: int = Field(..., description="X coordinate (in original screen scale)")
-    y: int = Field(..., description="Y coordinate (in original screen scale)")
+    x: int = Field(..., description="X coordinate")
+    y: int = Field(..., description="Y coordinate")
     button: str = Field(default="left", description="Mouse button: left, right, middle")
 
 
@@ -154,30 +154,8 @@ class TaskResult(BaseModel):
     final_state: Optional[dict] = None
 
 
-class InferenceRequest(BaseModel):
-    """Request to the cloud inference API"""
-
-    task: str = Field(..., description="User task/intent from Quantum")
-    screenshot_base64: str = Field(..., description="Base64 encoded screenshot (scaled to 1000x1000)")
-    original_width: int = Field(..., description="Original screenshot width")
-    original_height: int = Field(..., description="Original screenshot height")
-    context: Optional[dict] = Field(default=None, description="Additional context from Quantum")
-    history: list[dict] = Field(default_factory=list, description="Previous actions taken")
-    step_number: int = Field(default=0, description="Current step number")
-
-
-class InferenceResponse(BaseModel):
-    """Response from the cloud inference API"""
-
-    action: dict = Field(..., description="Next action to execute")
-    reasoning: Optional[str] = Field(default=None, description="Model's reasoning")
-    confidence: float = Field(default=1.0, description="Confidence score 0-1")
-    requires_confirmation: bool = Field(default=False)
-    estimated_remaining_steps: Optional[int] = None
-
-
 # ============================================================================
-# NEW API MODELS (agi-api integration)
+# API MODELS (agi-api integration)
 # ============================================================================
 
 

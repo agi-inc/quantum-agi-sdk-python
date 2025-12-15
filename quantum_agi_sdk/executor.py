@@ -4,8 +4,9 @@ Local action executor - executes actions on the device
 
 import platform
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
+import mss
 import pyautogui
 
 from quantum_agi_sdk.models import (
@@ -21,6 +22,61 @@ from quantum_agi_sdk.models import (
 # Configure pyautogui for safety
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1
+
+# Cache for DPI scale factor
+_cached_scale_factor: Optional[float] = None
+
+
+def get_scale_factor() -> float:
+    """
+    Get the DPI scale factor for the primary monitor.
+
+    Screenshots (via mss) are in physical pixels, but pyautogui clicks
+    use logical coordinates. On HiDPI displays (e.g., Retina), we need
+    to divide physical coordinates by the scale factor.
+
+    Returns:
+        Scale factor (e.g., 2.0 for Retina displays, 1.0 for standard)
+    """
+    global _cached_scale_factor
+    if _cached_scale_factor is not None:
+        return _cached_scale_factor
+
+    try:
+        # Get physical size from mss (what screenshots capture)
+        with mss.mss() as sct:
+            # monitors[0] is "all monitors", monitors[1] is primary
+            primary = sct.monitors[1]
+            physical_width = primary["width"]
+            physical_height = primary["height"]
+
+        # Get logical size from pyautogui (what clicks use)
+        logical_width, logical_height = pyautogui.size()
+
+        # Calculate scale factor (use width, but height should match)
+        if logical_width > 0:
+            _cached_scale_factor = physical_width / logical_width
+        else:
+            _cached_scale_factor = 1.0
+    except Exception:
+        _cached_scale_factor = 1.0
+
+    return _cached_scale_factor
+
+
+def to_logical_coords(x: int, y: int) -> Tuple[int, int]:
+    """
+    Convert physical (screenshot) coordinates to logical (click) coordinates.
+
+    Args:
+        x: Physical X coordinate
+        y: Physical Y coordinate
+
+    Returns:
+        Tuple of (logical_x, logical_y)
+    """
+    scale = get_scale_factor()
+    return (round(x / scale), round(y / scale))
 
 
 class ActionExecutor:
@@ -70,8 +126,8 @@ class ActionExecutor:
 
     def _execute_click(self, action: dict) -> bool:
         """Execute a click action"""
-        x = action["x"]
-        y = action["y"]
+        # Convert from physical (screenshot) to logical (click) coordinates
+        x, y = to_logical_coords(action["x"], action["y"])
         action_type = action["type"]
         button = action.get("button", "left")
 
@@ -137,9 +193,10 @@ class ActionExecutor:
         direction = action["direction"]
         amount = action.get("amount", 3)
 
-        # Move to position if specified
+        # Move to position if specified (convert from physical to logical)
         if x is not None and y is not None:
-            pyautogui.moveTo(x, y)
+            logical_x, logical_y = to_logical_coords(x, y)
+            pyautogui.moveTo(logical_x, logical_y)
 
         # Convert direction to scroll amount
         if direction == "up":
@@ -155,10 +212,9 @@ class ActionExecutor:
 
     def _execute_drag(self, action: dict) -> bool:
         """Execute a drag action"""
-        start_x = action["start_x"]
-        start_y = action["start_y"]
-        end_x = action["end_x"]
-        end_y = action["end_y"]
+        # Convert from physical (screenshot) to logical (click) coordinates
+        start_x, start_y = to_logical_coords(action["start_x"], action["start_y"])
+        end_x, end_y = to_logical_coords(action["end_x"], action["end_y"])
 
         pyautogui.moveTo(start_x, start_y)
         pyautogui.drag(end_x - start_x, end_y - start_y, duration=0.5)

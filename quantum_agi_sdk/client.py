@@ -3,6 +3,7 @@ Main AGI Client - The primary SDK interface
 """
 
 import asyncio
+import json
 import time
 import uuid
 from typing import Callable, Optional
@@ -88,8 +89,7 @@ class AGIClient:
         self._pending_question: Optional[QuestionRequest] = None
         self._question_event = asyncio.Event()
         self._answer: Optional[str] = None
-        self._action_history: list[dict] = []
-        self._screenshot_history: list[str] = []
+        self._messages: list[dict] = []
         self._task_start_time: Optional[float] = None
         self._session_id: Optional[str] = None
 
@@ -114,8 +114,7 @@ class AGIClient:
 
         self._running = True
         self._paused = False
-        self._action_history = []
-        self._screenshot_history = []
+        self._messages = []
         self._task_start_time = time.time()
 
         self._update_state(
@@ -145,6 +144,12 @@ class AGIClient:
             self._session_id = session.id
         except Exception as e:
             raise RuntimeError(f"Failed to start session: {e}")
+
+        # Add initial task as user message
+        self._messages.append({
+            "role": "user",
+            "content": [{"type": "text", "text": f"Task: {task}"}],
+        })
 
         try:
             return await self._execute_task_loop(task, context)
@@ -226,16 +231,27 @@ class AGIClient:
                 progress_message=f"Executing step {step}...",
             )
 
-            # Capture screenshot and add to history (keep last 4)
+            # Capture screenshot and add as user message
             screenshot_b64 = self._capture.capture()
-            self._screenshot_history.append(screenshot_b64)
-            if len(self._screenshot_history) > 4:
-                self._screenshot_history.pop(0)
+
+            # Add screenshot as user message
+            self._messages.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
+                    },
+                ],
+            })
+
+            # Keep only last ~20 messages to avoid context overflow
+            if len(self._messages) > 20:
+                self._messages = self._messages[-20:]
 
             # Get next action from cloud inference
             request = QuantumInferenceRequest(
-                screenshots=list(self._screenshot_history),  # Up to 4 screenshots in chronological order
-                history=self._action_history[-10:],
+                messages=list(self._messages),
             )
 
             response = await self._call_quantum_inference(request)
@@ -295,7 +311,23 @@ class AGIClient:
 
             # Execute the action
             await self._run_action(action)
-            self._action_history.append(action)
+
+            # Record action as assistant message with tool call
+            self._messages.append({
+                "role": "assistant",
+                "content": response.reasoning or "",
+                "tool_calls": [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "type": "function",
+                        "function": {
+                            "name": action.get("type", "unknown"),
+                            "arguments": json.dumps(action),
+                        },
+                    },
+                ],
+            })
+
             await asyncio.sleep(self._step_delay)
 
         self._update_state(status=AgentStatus.FAIL, error="Maximum steps reached")

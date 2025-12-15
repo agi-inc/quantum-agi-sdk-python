@@ -211,7 +211,7 @@ class AGIClient:
                 continue
 
             # Check for task completion
-            if action.get("type") == "done":
+            if action.get("type") == "finish":
                 self._update_state(
                     status=AgentStatus.FINISH,
                     progress_message=action.get("message", "Task completed successfully"),

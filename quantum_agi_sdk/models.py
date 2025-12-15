@@ -20,7 +20,7 @@ class ActionType(str, Enum):
     DRAG = "drag"
     WAIT = "wait"
     SCREENSHOT = "screenshot"
-    DONE = "done"
+    FINISH = "finish"
     FAIL = "fail"
     CONFIRM = "confirm"
 
@@ -75,10 +75,10 @@ class WaitAction(BaseModel):
     duration: float = Field(default=1.0, description="Duration in seconds")
 
 
-class DoneAction(BaseModel):
+class FinishAction(BaseModel):
     """Task completed successfully"""
 
-    type: Literal["done"] = "done"
+    type: Literal["finish"] = "finish"
     message: str = Field(default="", description="Completion message")
 
 
@@ -105,7 +105,7 @@ Action = Union[
     ScrollAction,
     DragAction,
     WaitAction,
-    DoneAction,
+    FinishAction,
     FailAction,
     ConfirmAction,
 ]

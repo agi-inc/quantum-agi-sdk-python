@@ -118,7 +118,7 @@ class ActionExecutor:
             return self._execute_drag(action)
         elif action_type == "wait":
             return self._execute_wait(action)
-        elif action_type in ("done", "fail", "confirm", "screenshot"):
+        elif action_type in ("finish", "fail", "confirm", "screenshot"):
             # These are control actions, not device actions
             return True
         else:

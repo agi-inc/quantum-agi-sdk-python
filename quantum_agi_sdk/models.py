@@ -201,7 +201,7 @@ class StartSessionResponse(BaseModel):
 class QuantumInferenceRequest(BaseModel):
     """Request for quantum inference step"""
 
-    screenshot_base64: str = Field(..., description="Base64-encoded PNG screenshot")
+    screenshots: list[str] = Field(..., description="Up to 4 base64-encoded PNG screenshots in chronological order")
     history: list[dict] = Field(default_factory=list)
 
 

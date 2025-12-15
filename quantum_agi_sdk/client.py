@@ -89,6 +89,7 @@ class AGIClient:
         self._question_event = asyncio.Event()
         self._answer: Optional[str] = None
         self._action_history: list[dict] = []
+        self._screenshot_history: list[str] = []
         self._task_start_time: Optional[float] = None
         self._session_id: Optional[str] = None
 
@@ -114,6 +115,7 @@ class AGIClient:
         self._running = True
         self._paused = False
         self._action_history = []
+        self._screenshot_history = []
         self._task_start_time = time.time()
 
         self._update_state(
@@ -224,12 +226,15 @@ class AGIClient:
                 progress_message=f"Executing step {step}...",
             )
 
-            # Capture screenshot
+            # Capture screenshot and add to history (keep last 4)
             screenshot_b64 = self._capture.capture()
+            self._screenshot_history.append(screenshot_b64)
+            if len(self._screenshot_history) > 4:
+                self._screenshot_history.pop(0)
 
             # Get next action from cloud inference
             request = QuantumInferenceRequest(
-                screenshot_base64=screenshot_b64,
+                screenshots=list(self._screenshot_history),  # Up to 4 screenshots in chronological order
                 history=self._action_history[-10:],
             )
 

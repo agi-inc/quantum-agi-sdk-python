@@ -109,7 +109,8 @@ AGIClient(
 - `start(task: str, context: Optional[dict] = None) -> TaskResult`: Start executing a task
 - `pause()`: Pause agent execution
 - `resume()`: Resume paused execution
-- `stop()`: Stop agent completely
+- `end_session()`: End the session completely
+- `send_message(message: str)`: Send a message to the agent
 - `confirm(confirmation_id: str, approved: bool = True)`: Respond to confirmation request
 - `interrupt(message: str)`: Interrupt the agent with a user message
 - `close()`: Close the HTTP client and cleanup resources
@@ -231,7 +232,7 @@ Or use the AGI API service at https://api.agi.inc
 - **Confirmation Flow**: High-impact actions (purchases, bookings, deletions) require user confirmation
 - **Failsafe**: Move mouse to screen corner to abort (pyautogui failsafe)
 - **Step Limit**: Default maximum of 100 steps per task
-- **Pause/Stop**: Agent can be paused or stopped at any time
+- **Pause/End Session**: Agent can be paused or the session can be ended at any time
 - **Interrupt**: Send messages to the agent during execution to provide guidance
 
 ## Examples

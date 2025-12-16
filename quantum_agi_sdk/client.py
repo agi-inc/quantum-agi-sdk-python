@@ -277,13 +277,13 @@ class AGIClient:
                     status=AgentStatus.FINISH,
                     progress_message=action.get("message", "Task completed successfully"),
                 )
-                # Wait for user to either add_message() to continue or end() to truly finish
+                # Wait for user to either send_message() to continue or end() to truly finish
                 self._paused_for_finish = True
                 self._finish_event.clear()
                 await self._finish_event.wait()
                 self._paused_for_finish = False
 
-                # If user called end(), exit the loop
+                # If user called end() to finish, exit the loop
                 if not self._running:
                     return TaskResult(
                         success=True,
@@ -426,8 +426,8 @@ class AGIClient:
         except Exception:
             pass
 
-    def add_message(self, message: str):
-        """Add a user message to the conversation history.
+    def send_message(self, message: str):
+        """Send a user message to the agent.
 
         This can be used to provide additional context or instructions.
         If the agent is paused after a finish action, this will resume execution.
@@ -465,12 +465,12 @@ class AGIClient:
         self._paused = False
         self._update_state(status=AgentStatus.RUNNING, progress_message="Agent resumed")
 
-    def stop(self):
-        """Stop the agent execution completely."""
+    def end_session(self):
+        """End the agent session completely."""
         self._running = False
         self._paused = False
         self._paused_for_finish = False
-        self._update_state(status=AgentStatus.FINISH, progress_message="Agent stopped by user")
+        self._update_state(status=AgentStatus.FINISH, progress_message="Session ended by user")
         self._confirmed = False
         self._confirmation_event.set()
         self._answer = None
@@ -524,8 +524,8 @@ class AGIClientSync:
     def resume(self):
         self._async_client.resume()
 
-    def stop(self):
-        self._async_client.stop()
+    def end_session(self):
+        self._async_client.end_session()
 
     def confirm(self, approved: bool = True):
         self._async_client.confirm(approved)
@@ -533,8 +533,8 @@ class AGIClientSync:
     def answer(self, user_answer: Optional[str]):
         self._async_client.answer(user_answer)
 
-    def add_message(self, message: str):
-        self._async_client.add_message(message)
+    def send_message(self, message: str):
+        self._async_client.send_message(message)
 
     def end(self):
         self._async_client.end()

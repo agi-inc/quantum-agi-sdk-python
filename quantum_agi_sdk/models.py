@@ -95,7 +95,6 @@ class ConfirmAction(BaseModel):
 
     type: Literal["confirm"] = "confirm"
     action_description: str = Field(..., description="Description of action requiring confirmation")
-    impact_level: str = Field(default="high", description="Impact level: low, medium, high")
     pending_action: dict = Field(..., description="The action to execute after confirmation")
 
 
@@ -148,9 +147,7 @@ class AgentState(BaseModel):
 class ConfirmationRequest(BaseModel):
     """Request for user confirmation"""
 
-    id: str
     action_description: str
-    impact_level: str
     pending_action: dict
     context: Optional[dict] = None
 
@@ -158,7 +155,6 @@ class ConfirmationRequest(BaseModel):
 class QuestionRequest(BaseModel):
     """Request for user to answer a question"""
 
-    id: str
     question: str
     context: Optional[str] = None
 
@@ -254,30 +250,3 @@ class FinishSessionResponse(BaseModel):
     finished_at: Optional[str] = None
 
 
-class InterruptRequest(BaseModel):
-    """Request to interrupt the agent with a user message"""
-
-    message: str = Field(..., description="User's interruption message")
-
-
-class InterruptResponse(BaseModel):
-    """Response from interrupting the agent"""
-
-    success: bool
-    message: Optional[str] = None
-    timestamp: Optional[str] = None
-
-
-class AnswerQuestionRequest(BaseModel):
-    """Request to answer a question from the agent"""
-
-    question_id: str = Field(..., description="ID of the question being answered")
-    answer: str = Field(..., description="User's answer to the question")
-
-
-class AnswerQuestionResponse(BaseModel):
-    """Response from answering a question"""
-
-    success: bool
-    message: Optional[str] = None
-    timestamp: Optional[str] = None

@@ -24,10 +24,6 @@ from quantum_agi_sdk.models import (
     QuantumInferenceResponse,
     FinishSessionRequest,
     FinishSessionResponse,
-    InterruptRequest,
-    InterruptResponse,
-    AnswerQuestionRequest,
-    AnswerQuestionResponse,
 )
 
 
@@ -92,6 +88,8 @@ class AGIClient:
         self._messages: list[dict] = []
         self._task_start_time: Optional[float] = None
         self._session_id: Optional[str] = None
+        self._paused_for_finish = False
+        self._finish_event = asyncio.Event()
 
     @property
     def state(self) -> AgentState:
@@ -174,21 +172,22 @@ class AGIClient:
                 await self._confirmation_event.wait()
                 self._confirmation_event.clear()
 
-                if not self._confirmed:
-                    self._pending_confirmation = None
-                    self._update_state(
-                        status=AgentStatus.FINISH,
-                        progress_message="User denied confirmation",
-                    )
-                    return TaskResult(
-                        success=False,
-                        message="User denied confirmation",
-                        steps_taken=step,
-                        duration_seconds=time.time() - self._task_start_time,
-                    )
+                if self._confirmed:
+                    # User approved - insert confirmation message and execute action
+                    self._messages.append({
+                        "role": "user",
+                        "content": [{"type": "text", "text": "User confirmed the action."}],
+                    })
+                    if self._pending_confirmation.pending_action:
+                        await self._run_action(self._pending_confirmation.pending_action)
+                else:
+                    # User denied - insert denial message and let agent adapt
+                    action_desc = self._pending_confirmation.action_description
+                    self._messages.append({
+                        "role": "user",
+                        "content": [{"type": "text", "text": f"User denied the action: {action_desc}. Please try a different approach."}],
+                    })
 
-                if self._pending_confirmation.pending_action:
-                    await self._run_action(self._pending_confirmation.pending_action)
                 self._pending_confirmation = None
                 self._update_state(status=AgentStatus.RUNNING)
                 continue
@@ -201,24 +200,18 @@ class AGIClient:
                 await self._question_event.wait()
                 self._question_event.clear()
 
-                if self._answer is None:
-                    self._pending_question = None
-                    self._update_state(
-                        status=AgentStatus.FINISH,
-                        progress_message="User cancelled question",
-                    )
-                    return TaskResult(
-                        success=False,
-                        message="User cancelled question",
-                        steps_taken=step,
-                        duration_seconds=time.time() - self._task_start_time,
-                    )
-
-                # Submit the answer to the server
-                try:
-                    await self._answer_question(self._pending_question.id, self._answer)
-                except Exception as e:
-                    print(f"Warning: Failed to submit answer: {e}")
+                if self._answer is not None:
+                    # User provided answer - insert as user message
+                    self._messages.append({
+                        "role": "user",
+                        "content": [{"type": "text", "text": f"User answer: {self._answer}"}],
+                    })
+                else:
+                    # User declined to answer - insert decline message
+                    self._messages.append({
+                        "role": "user",
+                        "content": [{"type": "text", "text": "User declined to answer. Please proceed without this information."}],
+                    })
 
                 self._pending_question = None
                 self._answer = None
@@ -260,11 +253,9 @@ class AGIClient:
             # Check if confirmation is required
             if response.requires_confirmation or action.get("type") == "confirm":
                 self._pending_confirmation = ConfirmationRequest(
-                    id=str(uuid.uuid4()),
                     action_description=action.get(
                         "action_description", response.reasoning or "Confirm this action?"
                     ),
-                    impact_level=action.get("impact_level", "high"),
                     pending_action=action.get("pending_action", action),
                     context={"step": step, "task": task},
                 )
@@ -275,7 +266,6 @@ class AGIClient:
             # Check if a question is being asked
             if action.get("type") == "ask_question":
                 self._pending_question = QuestionRequest(
-                    id=str(uuid.uuid4()),
                     question=action.get("question", "Please provide input"),
                     context=action.get("context"),
                 )
@@ -283,18 +273,29 @@ class AGIClient:
                     self._on_question_required(self._pending_question)
                 continue
 
-            # Check for task completion
+            # Check for task completion - enter paused state, don't return
             if action.get("type") == "finish":
                 self._update_state(
                     status=AgentStatus.FINISH,
                     progress_message=action.get("message", "Task completed successfully"),
                 )
-                return TaskResult(
-                    success=True,
-                    message=action.get("message", "Task completed successfully"),
-                    steps_taken=step,
-                    duration_seconds=time.time() - self._task_start_time,
-                )
+                # Wait for user to either add_message() to continue or end() to truly finish
+                self._paused_for_finish = True
+                self._finish_event.clear()
+                await self._finish_event.wait()
+                self._paused_for_finish = False
+
+                # If user called end(), exit the loop
+                if not self._running:
+                    return TaskResult(
+                        success=True,
+                        message=action.get("message", "Task completed successfully"),
+                        steps_taken=step,
+                        duration_seconds=time.time() - self._task_start_time,
+                    )
+                # Otherwise, user added a message - continue the loop
+                self._update_state(status=AgentStatus.RUNNING)
+                continue
 
             # Check for failure
             if action.get("type") == "fail":
@@ -427,23 +428,30 @@ class AGIClient:
         except Exception:
             pass
 
-    async def interrupt(self, message: str) -> InterruptResponse:
-        """Send an interruption message to the agent."""
-        if not self._session_id:
-            raise RuntimeError("No active session")
+    def add_message(self, message: str):
+        """Add a user message to the conversation history.
 
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+        This can be used to provide additional context or instructions.
+        If the agent is paused after a finish action, this will resume execution.
+        """
+        self._messages.append({
+            "role": "user",
+            "content": [{"type": "text", "text": message}],
+        })
+        # Resume loop if paused after finish
+        if self._paused_for_finish:
+            self._update_state(status=AgentStatus.RUNNING)
+            self._finish_event.set()
 
-        request = InterruptRequest(message=message)
-        response = await self._http_client.post(
-            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/interrupt",
-            json=request.model_dump(),
-            headers=headers,
-        )
-        response.raise_for_status()
-        return InterruptResponse(**response.json())
+    def end(self):
+        """Explicitly end the session.
+
+        Use this when you want to truly finish after the agent has completed
+        and entered the paused-for-finish state.
+        """
+        self._running = False
+        self._paused_for_finish = False
+        self._finish_event.set()
 
     def pause(self):
         """Pause the agent execution."""
@@ -463,50 +471,30 @@ class AGIClient:
         """Stop the agent execution completely."""
         self._running = False
         self._paused = False
+        self._paused_for_finish = False
         self._update_state(status=AgentStatus.FINISH, progress_message="Agent stopped by user")
         self._confirmed = False
         self._confirmation_event.set()
         self._answer = None
         self._question_event.set()
+        self._finish_event.set()
 
-    def confirm(self, confirmation_id: str, approved: bool = True):
+    def confirm(self, approved: bool = True):
         """Respond to a confirmation request."""
         if not self._pending_confirmation:
-            return
-        if self._pending_confirmation.id != confirmation_id:
             return
         self._confirmed = approved
         self._confirmation_event.set()
 
-    def answer(self, question_id: str, answer: Optional[str]):
+    def answer(self, user_answer: Optional[str]):
         """Submit an answer to a question from the agent.
 
-        Pass None as answer to cancel the question.
+        Pass None as answer to decline answering (agent will continue without it).
         """
         if not self._pending_question:
             return
-        if self._pending_question.id != question_id:
-            return
-        self._answer = answer
+        self._answer = user_answer
         self._question_event.set()
-
-    async def _answer_question(self, question_id: str, answer: str) -> AnswerQuestionResponse:
-        """Submit an answer to the server for a question the agent asked."""
-        if not self._session_id:
-            raise RuntimeError("No active session")
-
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-
-        request = AnswerQuestionRequest(question_id=question_id, answer=answer)
-        response = await self._http_client.post(
-            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/answer",
-            json=request.model_dump(),
-            headers=headers,
-        )
-        response.raise_for_status()
-        return AnswerQuestionResponse(**response.json())
 
     def _update_state(self, **kwargs):
         """Update agent state and notify listeners"""
@@ -541,14 +529,17 @@ class AGIClientSync:
     def stop(self):
         self._async_client.stop()
 
-    def confirm(self, confirmation_id: str, approved: bool = True):
-        self._async_client.confirm(confirmation_id, approved)
+    def confirm(self, approved: bool = True):
+        self._async_client.confirm(approved)
 
-    def answer(self, question_id: str, answer: Optional[str]):
-        self._async_client.answer(question_id, answer)
+    def answer(self, user_answer: Optional[str]):
+        self._async_client.answer(user_answer)
 
-    def interrupt(self, message: str) -> InterruptResponse:
-        return self._loop.run_until_complete(self._async_client.interrupt(message))
+    def add_message(self, message: str):
+        self._async_client.add_message(message)
+
+    def end(self):
+        self._async_client.end()
 
     @property
     def state(self) -> AgentState:

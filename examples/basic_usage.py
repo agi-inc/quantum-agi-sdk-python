@@ -94,7 +94,7 @@ async def main():
 
     except KeyboardInterrupt:
         print("\n\nTask interrupted by user")
-        client.stop()
+        client.end_session()
     finally:
         await client.close()
 

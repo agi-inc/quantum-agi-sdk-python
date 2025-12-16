@@ -83,9 +83,9 @@ class AgentWorker(QObject):
         if self._client:
             self._client.resume()
 
-    def stop(self):
+    def end_session(self):
         if self._client:
-            self._client.stop()
+            self._client.end_session()
 
     def confirm(self, confirmation_id: str, approved: bool):
         if self._client:
@@ -247,9 +247,9 @@ class MainWindow(QMainWindow):
             self._resume_btn.setEnabled(False)
 
     def _on_stop(self):
-        """Stop the agent"""
+        """End the agent session"""
         if self._worker:
-            self._worker.stop()
+            self._worker.end_session()
         self._cleanup_thread()
 
     def _on_status_changed(self, state: AgentState):
@@ -360,7 +360,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle window close"""
         if self._worker:
-            self._worker.stop()
+            self._worker.end_session()
         self._cleanup_thread()
         event.accept()
 

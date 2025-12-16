@@ -41,6 +41,7 @@ class AGIClient:
 
     def __init__(
         self,
+        api_url: str = "https://api.agi.tech",
         api_key: Optional[str] = None,
         on_status_change: Optional[Callable[[AgentState], None]] = None,
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
@@ -53,6 +54,7 @@ class AGIClient:
         Initialize the AGI Client.
 
         Args:
+            api_url: URL of the AGI cloud inference API
             api_key: API key for authentication
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
@@ -61,7 +63,7 @@ class AGIClient:
             max_steps: Maximum steps before stopping
             step_delay: Delay between steps in seconds
         """
-        self._api_url = "https://api.agi.tech"
+        self._api_url = api_url.rstrip("/")
         self._api_key = api_key
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required

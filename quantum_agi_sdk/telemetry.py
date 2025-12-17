@@ -16,12 +16,11 @@ class TelemetryManager:
     """
     Manages SDK telemetry using Sentry.
 
-    This class wraps Sentry SDK initialization and provides tracing APIs
-    that send events directly to Sentry for real-time observability.
+    This class wraps Sentry SDK initialization and provides event-based
+    logging APIs that send events directly to Sentry for real-time observability.
     """
 
     def __init__(self):
-        self._transaction: Optional[Any] = None
         self._initialized = False
 
     def initialize(self) -> None:
@@ -49,38 +48,6 @@ class TelemetryManager:
         except Exception:
             # Initialization failed, tracing disabled
             pass
-
-    def start_transaction(self, name: str, op: str) -> Optional[Any]:
-        """Start a new Sentry transaction."""
-        if not self._initialized:
-            return None
-
-        try:
-            import sentry_sdk
-
-            self._transaction = sentry_sdk.start_transaction(name=name, op=op)
-            sentry_sdk.configure_scope(lambda scope: setattr(scope, "transaction", self._transaction))
-            return self._transaction
-        except Exception:
-            return None
-
-    def set_tag(self, key: str, value: str) -> None:
-        """Set a tag on the current transaction."""
-        if self._transaction:
-            try:
-                self._transaction.set_tag(key, value)
-            except Exception:
-                pass
-
-    def start_span(self, op: str, description: str) -> Optional[Any]:
-        """Start a child span on the current transaction."""
-        if not self._transaction:
-            return None
-
-        try:
-            return self._transaction.start_child(op=op, description=description)
-        except Exception:
-            return None
 
     def add_breadcrumb(self, category: str, message: str, level: str = "info", data: Optional[dict] = None) -> None:
         """Add a breadcrumb to the current scope."""
@@ -130,17 +97,6 @@ class TelemetryManager:
             sentry_sdk.capture_exception(exception)
         except Exception:
             pass
-
-    def finish_transaction(self, status: str = "ok") -> None:
-        """Finish the current transaction."""
-        if self._transaction:
-            try:
-                self._transaction.set_status(status)
-                self._transaction.finish()
-            except Exception:
-                pass
-            finally:
-                self._transaction = None
 
     def flush(self, timeout: float = 2.0) -> None:
         """Flush all pending events."""

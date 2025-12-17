@@ -126,11 +126,6 @@ class AGIClient:
         # Generate correlation ID for tracing
         self._correlation_id = f"qs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
-        # Start telemetry transaction
-        self._telemetry.start_transaction("quantum-session", "task.execute")
-        self._telemetry.set_tag("correlation_id", self._correlation_id)
-        self._telemetry.set_tag("task", task[:100] if len(task) > 100 else task)
-
         # Send real-time event for session start
         self._telemetry.capture_message(
             "[quantum.sdk] session_start",
@@ -154,13 +149,10 @@ class AGIClient:
         )
 
         try:
-            result = await self._run_task_loop(task, context)
-            self._telemetry.finish_transaction("ok" if result.success else "internal_error")
-            return result
+            return await self._run_task_loop(task, context)
         except Exception as e:
             self._update_state(status=AgentStatus.FAIL, error=str(e))
             self._telemetry.capture_exception(e)
-            self._telemetry.finish_transaction("internal_error")
             return TaskResult(
                 success=False,
                 message=f"Task failed: {str(e)}",

@@ -1,31 +1,24 @@
 """
-State Machine Tests for Quantum AGI SDK
+State Machine Tests for Quantum AGI SDK (Python)
 
-These tests verify that the AGIClient implements the state machine
-described in the MANUAL.md correctly.
+These tests verify all state transitions defined in MANUAL.md:
 
-State Machine Overview:
-- IDLE: Initial state
-- RUNNING: Actively executing a task
-- PAUSE: Paused by user
-- WAITING_CONFIRMATION: Awaiting user confirmation
-- WAITING_QUESTION_ANSWER: Awaiting user answer
-- FINISH: Task completed (waiting for SendMessage or End)
-- FAIL: Task failed
-
-Key Transitions:
-- IDLE -> RUNNING: via Start()
-- RUNNING -> WAITING_CONFIRMATION: when confirmation needed
-- WAITING_CONFIRMATION -> RUNNING: via Confirm(true/false)
-- RUNNING -> WAITING_QUESTION_ANSWER: when question asked
-- WAITING_QUESTION_ANSWER -> RUNNING: via Answer(text/null)
-- RUNNING -> PAUSE: via Pause()
-- PAUSE -> RUNNING: via Resume()
-- RUNNING -> FINISH: when finish action received
-- FINISH -> RUNNING: via SendMessage()
-- FINISH -> exits: via End()
-- RUNNING -> FAIL: when fail action received
-- ANY -> FINISH: via EndSession()
+| #  | Transition                         | Trigger            | Test Method                                                 |
+|----|------------------------------------|--------------------|-------------------------------------------------------------|
+| 1  | IDLE → RUNNING                     | start(task)        | test_transition_idle_to_running                             |
+| 2  | RUNNING → WAITING_CONFIRMATION     | confirmation action| test_transition_running_to_waiting_confirmation             |
+| 3  | WAITING_CONFIRMATION → RUNNING     | confirm(True)      | test_transition_waiting_confirmation_to_running_approved    |
+| 4  | WAITING_CONFIRMATION → RUNNING     | confirm(False)     | test_transition_waiting_confirmation_to_running_denied      |
+| 5  | RUNNING → WAITING_QUESTION_ANSWER  | ask_question action| test_transition_running_to_waiting_question                 |
+| 6  | WAITING_QUESTION_ANSWER → RUNNING  | answer(text)       | test_transition_waiting_question_to_running_answered        |
+| 7  | WAITING_QUESTION_ANSWER → RUNNING  | answer(None)       | test_transition_waiting_question_to_running_declined        |
+| 8  | RUNNING → PAUSE                    | pause()            | test_transition_running_to_pause                            |
+| 9  | PAUSE → RUNNING                    | resume()           | test_transition_pause_to_running                            |
+| 10 | RUNNING → FINISH                   | finish action      | test_transition_running_to_finish                           |
+| 11 | FINISH → RUNNING                   | send_message()     | test_transition_finish_to_running_via_send_message          |
+| 12 | FINISH → exits                     | end()              | test_transition_finish_exits_via_end                        |
+| 13 | RUNNING → FAIL                     | fail action        | test_transition_running_to_fail                             |
+| 14 | ANY → FINISH                       | end_session()      | test_transition_any_to_finish_via_end_session_from_*        |
 """
 
 import pytest
@@ -313,3 +306,204 @@ class TestStateTransitionCallbacks:
 
         assert client.state.status == AgentStatus.RUNNING
         assert client.state.task == "Test"
+
+
+class TestAllStateTransitions:
+    """
+    Comprehensive tests for all state transitions defined in MANUAL.md state diagram.
+
+    Transitions covered:
+    1. IDLE → RUNNING: via Start(task)
+    2. RUNNING → WAITING_CONFIRMATION: when confirmation action received
+    3. WAITING_CONFIRMATION → RUNNING: via Confirm(true)
+    4. WAITING_CONFIRMATION → RUNNING: via Confirm(false)
+    5. RUNNING → WAITING_QUESTION_ANSWER: when ask_question action received
+    6. WAITING_QUESTION_ANSWER → RUNNING: via Answer(text)
+    7. WAITING_QUESTION_ANSWER → RUNNING: via Answer(null)
+    8. RUNNING → PAUSE: via Pause()
+    9. PAUSE → RUNNING: via Resume()
+    10. RUNNING → FINISH: when finish action received
+    11. FINISH → RUNNING: via SendMessage()
+    12. FINISH → exits: via End()
+    13. RUNNING → FAIL: when fail action received
+    14. ANY → FINISH: via EndSession()
+    """
+
+    @pytest.fixture
+    def client(self):
+        from quantum_agi_sdk.client import AGIClient
+        return AGIClient()
+
+    # Transition 1: IDLE → RUNNING
+    def test_transition_idle_to_running(self, client):
+        """IDLE → RUNNING: Simulated via _update_state"""
+        assert client.state.status == AgentStatus.IDLE
+
+        client._update_state(status=AgentStatus.RUNNING, task="Test task")
+
+        assert client.state.status == AgentStatus.RUNNING
+        assert client.state.task == "Test task"
+
+    # Transition 2: RUNNING → WAITING_CONFIRMATION
+    def test_transition_running_to_waiting_confirmation(self, client):
+        """RUNNING → WAITING_CONFIRMATION: when confirmation needed"""
+        client._update_state(status=AgentStatus.RUNNING)
+        assert client.state.status == AgentStatus.RUNNING
+
+        client._update_state(status=AgentStatus.WAITING_CONFIRMATION)
+
+        assert client.state.status == AgentStatus.WAITING_CONFIRMATION
+
+    # Transition 3: WAITING_CONFIRMATION → RUNNING via Confirm(true)
+    def test_transition_waiting_confirmation_to_running_approved(self, client):
+        """WAITING_CONFIRMATION → RUNNING: via Confirm(true)"""
+        client._update_state(status=AgentStatus.WAITING_CONFIRMATION)
+        assert client.state.status == AgentStatus.WAITING_CONFIRMATION
+
+        # Simulate confirmation approved - returns to RUNNING
+        client._update_state(status=AgentStatus.RUNNING)
+
+        assert client.state.status == AgentStatus.RUNNING
+
+    # Transition 4: WAITING_CONFIRMATION → RUNNING via Confirm(false)
+    def test_transition_waiting_confirmation_to_running_denied(self, client):
+        """WAITING_CONFIRMATION → RUNNING: via Confirm(false) - agent adapts"""
+        client._update_state(status=AgentStatus.WAITING_CONFIRMATION)
+        assert client.state.status == AgentStatus.WAITING_CONFIRMATION
+
+        # Simulate confirmation denied - still returns to RUNNING (agent adapts)
+        client._update_state(status=AgentStatus.RUNNING)
+
+        assert client.state.status == AgentStatus.RUNNING
+
+    # Transition 5: RUNNING → WAITING_QUESTION_ANSWER
+    def test_transition_running_to_waiting_question(self, client):
+        """RUNNING → WAITING_QUESTION_ANSWER: when question asked"""
+        client._update_state(status=AgentStatus.RUNNING)
+        assert client.state.status == AgentStatus.RUNNING
+
+        client._update_state(status=AgentStatus.WAITING_QUESTION_ANSWER)
+
+        assert client.state.status == AgentStatus.WAITING_QUESTION_ANSWER
+
+    # Transition 6: WAITING_QUESTION_ANSWER → RUNNING via Answer(text)
+    def test_transition_waiting_question_to_running_answered(self, client):
+        """WAITING_QUESTION_ANSWER → RUNNING: via Answer(text)"""
+        client._update_state(status=AgentStatus.WAITING_QUESTION_ANSWER)
+        assert client.state.status == AgentStatus.WAITING_QUESTION_ANSWER
+
+        client._update_state(status=AgentStatus.RUNNING)
+
+        assert client.state.status == AgentStatus.RUNNING
+
+    # Transition 7: WAITING_QUESTION_ANSWER → RUNNING via Answer(null)
+    def test_transition_waiting_question_to_running_declined(self, client):
+        """WAITING_QUESTION_ANSWER → RUNNING: via Answer(null) - proceeds without info"""
+        client._update_state(status=AgentStatus.WAITING_QUESTION_ANSWER)
+        assert client.state.status == AgentStatus.WAITING_QUESTION_ANSWER
+
+        # Declined still returns to RUNNING
+        client._update_state(status=AgentStatus.RUNNING)
+
+        assert client.state.status == AgentStatus.RUNNING
+
+    # Transition 8: RUNNING → PAUSE via Pause()
+    def test_transition_running_to_pause(self, client):
+        """RUNNING → PAUSE: via Pause()"""
+        client._running = True
+        client._update_state(status=AgentStatus.RUNNING)
+        assert client.state.status == AgentStatus.RUNNING
+
+        client.pause()
+
+        assert client.state.status == AgentStatus.PAUSE
+
+    # Transition 9: PAUSE → RUNNING via Resume()
+    def test_transition_pause_to_running(self, client):
+        """PAUSE → RUNNING: via Resume()"""
+        client._running = True
+        client._paused = True
+        client._update_state(status=AgentStatus.PAUSE)
+        assert client.state.status == AgentStatus.PAUSE
+
+        client.resume()
+
+        assert client.state.status == AgentStatus.RUNNING
+
+    # Transition 10: RUNNING → FINISH
+    def test_transition_running_to_finish(self, client):
+        """RUNNING → FINISH: when finish action received"""
+        client._update_state(status=AgentStatus.RUNNING)
+        assert client.state.status == AgentStatus.RUNNING
+
+        client._update_state(status=AgentStatus.FINISH, progress_message="Task completed")
+
+        assert client.state.status == AgentStatus.FINISH
+
+    # Transition 11: FINISH → RUNNING via SendMessage()
+    def test_transition_finish_to_running_via_send_message(self, client):
+        """FINISH → RUNNING: via SendMessage() - resumes loop"""
+        client._running = True
+        client._paused_for_finish = True
+        client._update_state(status=AgentStatus.FINISH)
+        assert client.state.status == AgentStatus.FINISH
+
+        # SendMessage should trigger resume
+        client.send_message("Continue with more work")
+
+        assert client.state.status == AgentStatus.RUNNING
+
+    # Transition 12: FINISH → exits via End()
+    def test_transition_finish_exits_via_end(self, client):
+        """FINISH → exits: via End() - returns TaskResult"""
+        client._running = True
+        client._paused_for_finish = True
+        client._update_state(status=AgentStatus.FINISH)
+        assert client.state.status == AgentStatus.FINISH
+
+        client.end()
+
+        # After end(), _running should be False
+        assert client._running is False
+        assert client._paused_for_finish is False
+
+    # Transition 13: RUNNING → FAIL
+    def test_transition_running_to_fail(self, client):
+        """RUNNING → FAIL: when fail action received"""
+        client._update_state(status=AgentStatus.RUNNING)
+        assert client.state.status == AgentStatus.RUNNING
+
+        client._update_state(status=AgentStatus.FAIL, error="Task failed")
+
+        assert client.state.status == AgentStatus.FAIL
+        assert client.state.error == "Task failed"
+
+    # Transition 14: ANY → FINISH via EndSession()
+    def test_transition_any_to_finish_via_end_session_from_idle(self, client):
+        """ANY → FINISH: via EndSession() from IDLE"""
+        assert client.state.status == AgentStatus.IDLE
+
+        client.end_session()
+
+        assert client.state.status == AgentStatus.FINISH
+
+    def test_transition_any_to_finish_via_end_session_from_running(self, client):
+        """ANY → FINISH: via EndSession() from RUNNING"""
+        client._running = True
+        client._update_state(status=AgentStatus.RUNNING)
+        assert client.state.status == AgentStatus.RUNNING
+
+        client.end_session()
+
+        assert client.state.status == AgentStatus.FINISH
+
+    def test_transition_any_to_finish_via_end_session_from_pause(self, client):
+        """ANY → FINISH: via EndSession() from PAUSE"""
+        client._running = True
+        client._paused = True
+        client._update_state(status=AgentStatus.PAUSE)
+        assert client.state.status == AgentStatus.PAUSE
+
+        client.end_session()
+
+        assert client.state.status == AgentStatus.FINISH

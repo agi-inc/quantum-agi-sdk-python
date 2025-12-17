@@ -6,7 +6,6 @@ Sends Sentry telemetry through the AGI API to hide Sentry from SDK users.
 
 import asyncio
 import base64
-import os
 import threading
 from collections import deque
 from datetime import datetime
@@ -121,27 +120,27 @@ class TelemetryManager:
     Manages SDK telemetry using Sentry with a proxy transport.
 
     This class wraps Sentry SDK initialization and provides tracing APIs
-    that route through the AGI API backend.
+    that route through the AGI API backend. Telemetry is always enabled
+    and routes through the AGI API to hide Sentry from SDK users.
     """
+
+    # Placeholder DSN - actual forwarding happens server-side via AGI API
+    PLACEHOLDER_DSN = "https://placeholder@sentry.internal/0"
 
     def __init__(
         self,
         api_url: str,
         api_key: Optional[str] = None,
-        enable_tracing: bool = True,
-        sentry_dsn: Optional[str] = None,
     ):
         self._api_url = api_url
         self._api_key = api_key
-        self._enable_tracing = enable_tracing
-        self._sentry_dsn = sentry_dsn or os.environ.get("SENTRY_DSN")
         self._transport: Optional[ProxyTransport] = None
         self._transaction: Optional[Any] = None
         self._initialized = False
 
     def initialize(self) -> None:
         """Initialize Sentry with proxy transport."""
-        if self._initialized or not self._enable_tracing or not self._sentry_dsn:
+        if self._initialized:
             return
 
         try:
@@ -149,12 +148,8 @@ class TelemetryManager:
 
             self._transport = ProxyTransport(self._api_url, self._api_key)
 
-            def before_send_transaction(event: dict, hint: dict) -> Optional[dict]:
-                """Intercept transactions and send via proxy transport."""
-                return event
-
             sentry_sdk.init(
-                dsn=self._sentry_dsn,
+                dsn=self.PLACEHOLDER_DSN,
                 traces_sample_rate=1.0,
                 send_default_pii=True,
                 transport=self._make_transport_class(),
@@ -197,7 +192,7 @@ class TelemetryManager:
 
     def start_transaction(self, name: str, op: str) -> Optional[Any]:
         """Start a new Sentry transaction."""
-        if not self._initialized or not self._enable_tracing:
+        if not self._initialized:
             return None
 
         try:

@@ -95,11 +95,8 @@ class AGIClient:
         self._finish_event = asyncio.Event()
         self._correlation_id: Optional[str] = None
 
-        # Initialize telemetry - always enabled, routes through AGI API
-        self._telemetry = TelemetryManager(
-            api_url=self._api_url,
-            api_key=self._api_key,
-        )
+        # Initialize telemetry - sends directly to Sentry
+        self._telemetry = TelemetryManager()
         self._telemetry.initialize()
 
     @property
@@ -133,11 +130,16 @@ class AGIClient:
         self._telemetry.start_transaction("quantum-session", "task.execute")
         self._telemetry.set_tag("correlation_id", self._correlation_id)
         self._telemetry.set_tag("task", task[:100] if len(task) > 100 else task)
-        self._telemetry.add_breadcrumb(
-            category="quantum.sdk",
-            message="session_start",
-            data={
+
+        # Send real-time event for session start
+        self._telemetry.capture_message(
+            "[quantum.sdk] session_start",
+            level="info",
+            tags={
+                "event_name": "session_start",
                 "correlation_id": self._correlation_id,
+            },
+            extras={
                 "task": task,
                 "api_url": self._api_url,
                 "max_steps": self._max_steps,
@@ -282,6 +284,24 @@ class AGIClient:
 
             response = await self._call_quantum_inference(request)
             action = response.action
+
+            # Send real-time event for inference response
+            self._telemetry.capture_message(
+                "[quantum.sdk] http_response",
+                level="info",
+                tags={
+                    "event_name": "http_response",
+                    "correlation_id": self._correlation_id,
+                    "session_id": self._session_id,
+                },
+                extras={
+                    "step": step,
+                    "action_type": action.get("type", "unknown"),
+                    "confidence": response.confidence,
+                    "requires_confirmation": response.requires_confirmation,
+                    "reasoning": response.reasoning or "",
+                },
+            )
 
             # Check if confirmation is required
             if response.requires_confirmation or action.get("type") == "confirm":

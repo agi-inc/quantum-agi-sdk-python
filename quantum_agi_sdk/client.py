@@ -4,8 +4,10 @@ Main AGI Client - The primary SDK interface
 
 import asyncio
 import json
+import os
 import time
 import uuid
+from datetime import datetime
 from typing import Callable, Optional
 
 import httpx
@@ -25,6 +27,7 @@ from quantum_agi_sdk.models import (
     FinishSessionRequest,
     FinishSessionResponse,
 )
+from quantum_agi_sdk.telemetry import TelemetryManager
 
 
 class AGIClient:
@@ -41,6 +44,7 @@ class AGIClient:
 
     def __init__(
         self,
+        api_url: Optional[str] = None,
         api_key: Optional[str] = None,
         on_status_change: Optional[Callable[[AgentState], None]] = None,
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
@@ -61,7 +65,7 @@ class AGIClient:
             max_steps: Maximum steps before stopping
             step_delay: Delay between steps in seconds
         """
-        self._api_url = "https://api.agi.tech"
+        self._api_url = (api_url or os.environ.get("AGI_API_URL") or "https://api.agi.tech").rstrip("/")
         self._api_key = api_key
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required
@@ -88,6 +92,11 @@ class AGIClient:
         self._session_id: Optional[str] = None
         self._paused_for_finish = False
         self._finish_event = asyncio.Event()
+        self._correlation_id: Optional[str] = None
+
+        # Initialize telemetry - sends directly to Sentry
+        self._telemetry = TelemetryManager()
+        self._telemetry.initialize()
 
     @property
     def state(self) -> AgentState:
@@ -113,6 +122,24 @@ class AGIClient:
         self._messages = []
         self._task_start_time = time.time()
 
+        # Generate correlation ID for tracing
+        self._correlation_id = f"qs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+        # Send real-time event for session start
+        self._telemetry.capture_message(
+            "[quantum.sdk] session_start",
+            level="info",
+            tags={
+                "event_name": "session_start",
+                "correlation_id": self._correlation_id,
+            },
+            extras={
+                "task": task,
+                "api_url": self._api_url,
+                "max_steps": self._max_steps,
+            },
+        )
+
         self._update_state(
             status=AgentStatus.RUNNING,
             task=task,
@@ -124,6 +151,7 @@ class AGIClient:
             return await self._run_task_loop(task, context)
         except Exception as e:
             self._update_state(status=AgentStatus.FAIL, error=str(e))
+            self._telemetry.capture_exception(e)
             return TaskResult(
                 success=False,
                 message=f"Task failed: {str(e)}",
@@ -247,6 +275,24 @@ class AGIClient:
 
             response = await self._call_quantum_inference(request)
             action = response.action
+
+            # Send real-time event for inference response
+            self._telemetry.capture_message(
+                "[quantum.sdk] http_response",
+                level="info",
+                tags={
+                    "event_name": "http_response",
+                    "correlation_id": self._correlation_id,
+                    "session_id": self._session_id,
+                },
+                extras={
+                    "step": step,
+                    "action_type": action.get("type", "unknown"),
+                    "confidence": response.confidence,
+                    "requires_confirmation": response.requires_confirmation,
+                    "reasoning": response.reasoning or "",
+                },
+            )
 
             # Check if confirmation is required
             if response.requires_confirmation or action.get("type") == "confirm":
@@ -506,6 +552,8 @@ class AGIClient:
         """Clean up resources"""
         await self._http_client.aclose()
         self._capture.close()
+        self._telemetry.flush()
+        self._telemetry.close()
 
 
 class AGIClientSync:

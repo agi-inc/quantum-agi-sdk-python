@@ -7,6 +7,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime
 from typing import Callable, Optional
 
 import httpx
@@ -26,6 +27,7 @@ from quantum_agi_sdk.models import (
     FinishSessionRequest,
     FinishSessionResponse,
 )
+from quantum_agi_sdk.telemetry import TelemetryManager
 
 
 class AGIClient:
@@ -91,6 +93,14 @@ class AGIClient:
         self._session_id: Optional[str] = None
         self._paused_for_finish = False
         self._finish_event = asyncio.Event()
+        self._correlation_id: Optional[str] = None
+
+        # Initialize telemetry - always enabled, routes through AGI API
+        self._telemetry = TelemetryManager(
+            api_url=self._api_url,
+            api_key=self._api_key,
+        )
+        self._telemetry.initialize()
 
     @property
     def state(self) -> AgentState:
@@ -116,6 +126,24 @@ class AGIClient:
         self._messages = []
         self._task_start_time = time.time()
 
+        # Generate correlation ID for tracing
+        self._correlation_id = f"qs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+        # Start telemetry transaction
+        self._telemetry.start_transaction("quantum-session", "task.execute")
+        self._telemetry.set_tag("correlation_id", self._correlation_id)
+        self._telemetry.set_tag("task", task[:100] if len(task) > 100 else task)
+        self._telemetry.add_breadcrumb(
+            category="quantum.sdk",
+            message="session_start",
+            data={
+                "correlation_id": self._correlation_id,
+                "task": task,
+                "api_url": self._api_url,
+                "max_steps": self._max_steps,
+            },
+        )
+
         self._update_state(
             status=AgentStatus.RUNNING,
             task=task,
@@ -124,9 +152,13 @@ class AGIClient:
         )
 
         try:
-            return await self._run_task_loop(task, context)
+            result = await self._run_task_loop(task, context)
+            self._telemetry.finish_transaction("ok" if result.success else "internal_error")
+            return result
         except Exception as e:
             self._update_state(status=AgentStatus.FAIL, error=str(e))
+            self._telemetry.capture_exception(e)
+            self._telemetry.finish_transaction("internal_error")
             return TaskResult(
                 success=False,
                 message=f"Task failed: {str(e)}",
@@ -509,6 +541,8 @@ class AGIClient:
         """Clean up resources"""
         await self._http_client.aclose()
         self._capture.close()
+        self._telemetry.flush()
+        self._telemetry.close()
 
 
 class AGIClientSync:

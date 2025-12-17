@@ -29,6 +29,12 @@ jobs:
           echo "VERSION=${BASE}.dev${{ github.run_number }}" >> $GITHUB_OUTPUT
           echo "TAG=v${BASE}.dev${{ github.run_number }}" >> $GITHUB_OUTPUT
 
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run tests
+        run: uv run pytest tests/ -v
+
       - name: Build package with dev version
         run: |
           sed -i "s/^version = .*/version = \"${{ steps.version.outputs.VERSION }}\"/" pyproject.toml

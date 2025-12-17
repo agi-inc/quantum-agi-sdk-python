@@ -7,6 +7,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime
 from typing import Callable, Optional
 
 import httpx
@@ -26,6 +27,7 @@ from quantum_agi_sdk.models import (
     FinishSessionRequest,
     FinishSessionResponse,
 )
+from quantum_agi_sdk.telemetry import TelemetryManager
 
 
 class AGIClient:
@@ -50,6 +52,8 @@ class AGIClient:
         on_action_executed: Optional[Callable[[dict], None]] = None,
         max_steps: int = 100,
         step_delay: float = 0.5,
+        enable_tracing: bool = False,
+        sentry_dsn: Optional[str] = None,
     ):
         """
         Initialize the AGI Client.
@@ -63,6 +67,8 @@ class AGIClient:
             on_action_executed: Callback after each action is executed
             max_steps: Maximum steps before stopping
             step_delay: Delay between steps in seconds
+            enable_tracing: Enable Sentry tracing for observability
+            sentry_dsn: Sentry DSN (uses SENTRY_DSN env var if not provided)
         """
         self._api_url = (api_url or os.environ.get("AGI_API_URL") or "https://api.agi.tech").rstrip("/")
         self._api_key = api_key
@@ -72,6 +78,7 @@ class AGIClient:
         self._on_action_executed = on_action_executed
         self._max_steps = max_steps
         self._step_delay = step_delay
+        self._enable_tracing = enable_tracing
 
         self._state = AgentState()
         self._capture = ScreenCapture()
@@ -91,6 +98,17 @@ class AGIClient:
         self._session_id: Optional[str] = None
         self._paused_for_finish = False
         self._finish_event = asyncio.Event()
+        self._correlation_id: Optional[str] = None
+
+        # Initialize telemetry
+        self._telemetry = TelemetryManager(
+            api_url=self._api_url,
+            api_key=self._api_key,
+            enable_tracing=enable_tracing,
+            sentry_dsn=sentry_dsn,
+        )
+        if enable_tracing:
+            self._telemetry.initialize()
 
     @property
     def state(self) -> AgentState:
@@ -116,6 +134,25 @@ class AGIClient:
         self._messages = []
         self._task_start_time = time.time()
 
+        # Generate correlation ID for tracing
+        self._correlation_id = f"qs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+        # Start Sentry transaction
+        if self._enable_tracing:
+            self._telemetry.start_transaction("quantum-session", "task.execute")
+            self._telemetry.set_tag("correlation_id", self._correlation_id)
+            self._telemetry.set_tag("task", task[:100] if len(task) > 100 else task)
+            self._telemetry.add_breadcrumb(
+                category="quantum.sdk",
+                message="session_start",
+                data={
+                    "correlation_id": self._correlation_id,
+                    "task": task,
+                    "api_url": self._api_url,
+                    "max_steps": self._max_steps,
+                },
+            )
+
         self._update_state(
             status=AgentStatus.RUNNING,
             task=task,
@@ -124,9 +161,15 @@ class AGIClient:
         )
 
         try:
-            return await self._run_task_loop(task, context)
+            result = await self._run_task_loop(task, context)
+            if self._enable_tracing:
+                self._telemetry.finish_transaction("ok" if result.success else "internal_error")
+            return result
         except Exception as e:
             self._update_state(status=AgentStatus.FAIL, error=str(e))
+            if self._enable_tracing:
+                self._telemetry.capture_exception(e)
+                self._telemetry.finish_transaction("internal_error")
             return TaskResult(
                 success=False,
                 message=f"Task failed: {str(e)}",
@@ -509,6 +552,9 @@ class AGIClient:
         """Clean up resources"""
         await self._http_client.aclose()
         self._capture.close()
+        if self._enable_tracing:
+            self._telemetry.flush()
+            self._telemetry.close()
 
 
 class AGIClientSync:

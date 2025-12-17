@@ -47,6 +47,7 @@ class AGIClient:
         self,
         api_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        model: Optional[str] = None,
         on_status_change: Optional[Callable[[AgentState], None]] = None,
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
         on_question_required: Optional[Callable[[QuestionRequest], None]] = None,
@@ -58,7 +59,9 @@ class AGIClient:
         Initialize the AGI Client.
 
         Args:
+            api_url: API URL (default: https://api.agi.tech)
             api_key: API key for authentication
+            model: Model to use for inference (e.g., 'agi-0', 'agi-1-preview'). If not set, uses server default.
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
             on_question_required: Callback when agent asks a question requiring user input
@@ -68,6 +71,7 @@ class AGIClient:
         """
         self._api_url = (api_url or os.environ.get("AGI_API_URL") or "https://api.agi.tech").rstrip("/")
         self._api_key = api_key
+        self._model = model
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required
         self._on_question_required = on_question_required
@@ -272,6 +276,7 @@ class AGIClient:
             # Get next action from cloud inference
             request = QuantumInferenceRequest(
                 messages=self._get_messages_copy(),
+                model=self._model,
             )
 
             response = await self._call_quantum_inference(request)

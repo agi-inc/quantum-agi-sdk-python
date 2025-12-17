@@ -1,0 +1,45 @@
+name: Publish Dev Package
+
+on:
+  push:
+    branches: [develop]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Get version from pyproject.toml
+        id: version
+        run: |
+          BASE=$(grep -oP '^version = "\K[^"]+' pyproject.toml)
+          echo "VERSION=${BASE}.dev${{ github.run_number }}" >> $GITHUB_OUTPUT
+          echo "TAG=v${BASE}.dev${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      - name: Build package with dev version
+        run: |
+          sed -i "s/^version = .*/version = \"${{ steps.version.outputs.VERSION }}\"/" pyproject.toml
+          uv build
+
+      - name: Create dev release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ steps.version.outputs.TAG }} \
+            --title "Dev Release ${{ steps.version.outputs.VERSION }}" \
+            --notes "Automated dev release from develop branch" \
+            --prerelease \
+            dist/*

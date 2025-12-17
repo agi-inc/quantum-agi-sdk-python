@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quantum-agi-sdk"
-version = "0.1.1-dev"
+version = "0.1.1"
 description = "AGI Computer Use Agent SDK for Quantum integration"
 readme = "README.md"
 license = "MIT"

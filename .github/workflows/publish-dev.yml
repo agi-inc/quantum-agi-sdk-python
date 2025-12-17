@@ -22,6 +22,11 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
       - name: Get version from pyproject.toml
         id: version
         run: |
@@ -33,7 +38,7 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run tests
-        run: uv run pytest tests/ -v
+        run: xvfb-run uv run pytest tests/ -v
 
       - name: Build package with dev version
         run: |

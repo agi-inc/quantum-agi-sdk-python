@@ -57,7 +57,6 @@ class AGIClient:
         Initialize the AGI Client.
 
         Args:
-            api_url: URL of the AGI cloud inference API
             api_key: API key for authentication
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed

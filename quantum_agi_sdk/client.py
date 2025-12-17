@@ -5,6 +5,7 @@ Main AGI Client - The primary SDK interface
 import asyncio
 import json
 import os
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -88,6 +89,7 @@ class AGIClient:
         self._question_event = asyncio.Event()
         self._answer: Optional[str] = None
         self._messages: list[dict] = []
+        self._messages_lock = threading.Lock()
         self._task_start_time: Optional[float] = None
         self._session_id: Optional[str] = None
         self._paused_for_finish = False
@@ -119,7 +121,7 @@ class AGIClient:
 
         self._running = True
         self._paused = False
-        self._messages = []
+        self._clear_messages()
         self._task_start_time = time.time()
 
         # Generate correlation ID for tracing
@@ -170,7 +172,7 @@ class AGIClient:
             raise RuntimeError(f"Failed to start session: {e}")
 
         # Add initial task as user message
-        self._messages.append({
+        self._add_message({
             "role": "user",
             "content": [{"type": "text", "text": f"Task: {task}"}],
         })
@@ -200,7 +202,7 @@ class AGIClient:
 
                 if self._confirmed:
                     # User approved - insert confirmation message and execute action
-                    self._messages.append({
+                    self._add_message({
                         "role": "user",
                         "content": [{"type": "text", "text": "User confirmed the action."}],
                     })
@@ -209,7 +211,7 @@ class AGIClient:
                 else:
                     # User denied - insert denial message and let agent adapt
                     action_desc = self._pending_confirmation.action_description
-                    self._messages.append({
+                    self._add_message({
                         "role": "user",
                         "content": [{"type": "text", "text": f"User denied the action: {action_desc}. Please try a different approach."}],
                     })
@@ -228,13 +230,13 @@ class AGIClient:
 
                 if self._answer is not None:
                     # User provided answer - insert as user message
-                    self._messages.append({
+                    self._add_message({
                         "role": "user",
                         "content": [{"type": "text", "text": f"User answer: {self._answer}"}],
                     })
                 else:
                     # User declined to answer - insert decline message
-                    self._messages.append({
+                    self._add_message({
                         "role": "user",
                         "content": [{"type": "text", "text": "User declined to answer. Please proceed without this information."}],
                     })
@@ -254,7 +256,7 @@ class AGIClient:
             screenshot_b64 = self._capture.capture()
 
             # Add screenshot as user message
-            self._messages.append({
+            self._add_message({
                 "role": "user",
                 "content": [
                     {
@@ -265,12 +267,11 @@ class AGIClient:
             })
 
             # Keep only last ~20 messages to avoid context overflow
-            if len(self._messages) > 20:
-                self._messages = self._messages[-20:]
+            self._trim_messages(20)
 
             # Get next action from cloud inference
             request = QuantumInferenceRequest(
-                messages=list(self._messages),
+                messages=self._get_messages_copy(),
             )
 
             response = await self._call_quantum_inference(request)
@@ -358,7 +359,7 @@ class AGIClient:
             await self._run_action(action)
 
             # Record action as assistant message with tool call
-            self._messages.append({
+            self._add_message({
                 "role": "assistant",
                 "content": response.reasoning or "",
                 "tool_calls": [
@@ -469,8 +470,18 @@ class AGIClient:
                 await self._fail_session()
             else:
                 await self._finish_session()
-        except Exception:
-            pass
+        except Exception as e:
+            # Log cleanup errors but don't throw - we're in cleanup phase
+            self._telemetry.add_breadcrumb(
+                category="quantum.sdk",
+                message="session_cleanup_error",
+                level="error",
+                data={
+                    "correlation_id": self._correlation_id or "",
+                    "session_id": self._session_id or "",
+                    "error": str(e),
+                },
+            )
 
     def send_message(self, message: str):
         """Send a user message to the agent.
@@ -478,7 +489,7 @@ class AGIClient:
         This can be used to provide additional context or instructions.
         If the agent is paused after a finish action, this will resume execution.
         """
-        self._messages.append({
+        self._add_message({
             "role": "user",
             "content": [{"type": "text", "text": message}],
         })
@@ -547,6 +558,27 @@ class AGIClient:
                 setattr(self._state, key, value)
         if self._on_status_change:
             self._on_status_change(self._state)
+
+    def _add_message(self, message: dict):
+        """Thread-safe method to add a message to the conversation"""
+        with self._messages_lock:
+            self._messages.append(message)
+
+    def _get_messages_copy(self) -> list[dict]:
+        """Thread-safe method to get a copy of all messages"""
+        with self._messages_lock:
+            return list(self._messages)
+
+    def _trim_messages(self, max_count: int):
+        """Thread-safe method to trim messages to a maximum count"""
+        with self._messages_lock:
+            if len(self._messages) > max_count:
+                self._messages = self._messages[-max_count:]
+
+    def _clear_messages(self):
+        """Thread-safe method to clear all messages"""
+        with self._messages_lock:
+            self._messages = []
 
     async def close(self):
         """Clean up resources"""

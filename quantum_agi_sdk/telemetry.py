@@ -25,8 +25,12 @@ class TelemetryManager:
         self._initialized = False
 
     def initialize(self) -> None:
-        """Initialize Sentry SDK."""
+        """Initialize Sentry SDK only if AGI_TELEMETRY_ENABLED=true."""
         if self._initialized:
+            return
+
+        import os
+        if os.environ.get("AGI_TELEMETRY_ENABLED") != "true":
             return
 
         try:

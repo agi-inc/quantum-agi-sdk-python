@@ -275,7 +275,7 @@ class AGIClient:
 
             # Get next action from cloud inference
             request = QuantumInferenceRequest(
-                messages=self._get_messages_copy(),
+                messages=self._filter_messages_for_images(self._get_messages_copy()),
                 model=self._model,
             )
 
@@ -573,6 +573,42 @@ class AGIClient:
         """Thread-safe method to get a copy of all messages"""
         with self._messages_lock:
             return list(self._messages)
+
+    @staticmethod
+    def _filter_messages_for_images(messages: list[dict], max_images: int = 5) -> list[dict]:
+        """Filter messages to keep only the last N images.
+
+        Does not modify the original messages - returns a new filtered list.
+        """
+        result = []
+        image_count = 0
+
+        # Process messages in reverse to keep the last N images
+        for msg in reversed(messages):
+            content = msg.get("content")
+            if isinstance(content, list):
+                filtered_content = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "image_url":
+                        if image_count < max_images:
+                            filtered_content.append(block)
+                            image_count += 1
+                        # Skip images beyond the limit
+                    else:
+                        # Keep non-image content
+                        filtered_content.append(block)
+
+                # Only add message if it has content left
+                if filtered_content:
+                    result.insert(0, {
+                        **msg,
+                        "content": filtered_content,
+                    })
+            else:
+                # Non-content-array messages (string content) pass through
+                result.insert(0, msg)
+
+        return result
 
     def _trim_messages(self, max_count: int):
         """Thread-safe method to trim messages to a maximum count"""

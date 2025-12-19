@@ -256,130 +256,205 @@ class AGIClient:
                 progress_message=f"Executing step {step}...",
             )
 
-            # Capture screenshot and add as user message
-            screenshot_b64 = self._capture.capture()
-
-            # Add screenshot as user message
-            self._add_message({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
-                    },
-                ],
-            })
-
-            # Keep only last ~20 messages to avoid context overflow
-            self._trim_messages(20)
-
-            # Get next action from cloud inference
-            request = QuantumInferenceRequest(
-                messages=self._filter_messages_for_images(self._get_messages_copy()),
-                model=self._model,
-            )
-
-            response = await self._call_quantum_inference(request)
-            action = response.action
-
-            # Send real-time event for inference response
-            self._telemetry.capture_message(
-                "[quantum.sdk] http_response",
-                level="info",
+            # Start agent.step transaction for this step
+            step_transaction = self._telemetry.start_transaction(
+                name=f"agent.step.{step}",
+                operation="agent.step",
                 tags={
-                    "event_name": "http_response",
-                    "correlation_id": self._correlation_id,
-                    "session_id": self._session_id,
-                },
-                extras={
-                    "step": step,
-                    "action_type": action.get("type", "unknown"),
-                    "confidence": response.confidence,
-                    "requires_confirmation": response.requires_confirmation,
-                    "reasoning": response.reasoning or "",
+                    "correlation_id": self._correlation_id or "",
+                    "session_id": self._session_id or "",
+                    "step": str(step),
                 },
             )
 
-            # Check if confirmation is required
-            if response.requires_confirmation or action.get("type") == "confirm":
-                self._pending_confirmation = ConfirmationRequest(
-                    action_description=action.get(
-                        "action_description", response.reasoning or "Confirm this action?"
-                    ),
-                    pending_action=action.get("pending_action", action),
-                    context={"step": step, "task": task},
-                )
-                if self._on_confirmation_required:
-                    self._on_confirmation_required(self._pending_confirmation)
-                continue
+            step_status = "ok"
 
-            # Check if a question is being asked
-            if action.get("type") == "ask_question":
-                self._pending_question = QuestionRequest(
-                    question=action.get("question", "Please provide input"),
-                    context=action.get("context"),
+            try:
+                # Capture screenshot with span tracking
+                screenshot_span = self._telemetry.start_span(
+                    operation="screenshot.capture",
+                    description="Capture screenshot",
+                    parent_span=step_transaction,
                 )
-                if self._on_question_required:
-                    self._on_question_required(self._pending_question)
-                continue
+                try:
+                    screenshot_b64 = self._capture.capture()
+                    self._telemetry.set_span_status(screenshot_span, "ok")
+                except Exception as e:
+                    self._telemetry.set_span_status(screenshot_span, "internal_error")
+                    self._telemetry.set_span_data(screenshot_span, "error", str(e))
+                    raise
+                finally:
+                    self._telemetry.finish_span(screenshot_span)
 
-            # Check for task completion - enter paused state, don't return
-            if action.get("type") == "finish":
-                self._update_state(
-                    status=AgentStatus.FINISH,
-                    progress_message=action.get("message", "Task completed successfully"),
+                # Add screenshot as user message
+                self._add_message({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
+                        },
+                    ],
+                })
+
+                # Keep only last ~20 messages to avoid context overflow
+                self._trim_messages(20)
+
+                # Get next action from cloud inference with span tracking
+                inference_span = self._telemetry.start_span(
+                    operation="http.client",
+                    description=f"POST /v1/quantum/sessions/{self._session_id}/inference",
+                    parent_span=step_transaction,
                 )
-                # Wait for user to either send_message() to continue or end() to truly finish
-                self._paused_for_finish = True
-                self._finish_event.clear()
-                await self._finish_event.wait()
-                self._paused_for_finish = False
+                self._telemetry.set_span_tag(inference_span, "http.method", "POST")
+                self._telemetry.set_span_data(inference_span, "http.url", f"{self._api_url}/v1/quantum/sessions/{self._session_id}/inference")
 
-                # If user called end() to finish, exit the loop
-                if not self._running:
+                request = QuantumInferenceRequest(
+                    messages=self._filter_messages_for_images(self._get_messages_copy()),
+                    model=self._model,
+                )
+
+                inference_start_time = time.time()
+                try:
+                    response = await self._call_quantum_inference(request)
+                    self._telemetry.set_span_status(inference_span, "ok")
+                    self._telemetry.set_span_data(inference_span, "http.status_code", 200)
+                except Exception as e:
+                    self._telemetry.set_span_status(inference_span, "internal_error")
+                    self._telemetry.set_span_data(inference_span, "error", str(e))
+                    raise
+                finally:
+                    latency_ms = (time.time() - inference_start_time) * 1000
+                    self._telemetry.set_span_data(inference_span, "latency_ms", latency_ms)
+                    self._telemetry.finish_span(inference_span)
+
+                action = response.action
+
+                # Send real-time event for inference response
+                self._telemetry.capture_message(
+                    "[quantum.sdk] http_response",
+                    level="info",
+                    tags={
+                        "event_name": "http_response",
+                        "correlation_id": self._correlation_id,
+                        "session_id": self._session_id,
+                    },
+                    extras={
+                        "step": step,
+                        "action_type": action.get("type", "unknown"),
+                        "confidence": response.confidence,
+                        "requires_confirmation": response.requires_confirmation,
+                        "reasoning": response.reasoning or "",
+                    },
+                )
+
+                # Check if confirmation is required
+                if response.requires_confirmation or action.get("type") == "confirm":
+                    self._pending_confirmation = ConfirmationRequest(
+                        action_description=action.get(
+                            "action_description", response.reasoning or "Confirm this action?"
+                        ),
+                        pending_action=action.get("pending_action", action),
+                        context={"step": step, "task": task},
+                    )
+                    if self._on_confirmation_required:
+                        self._on_confirmation_required(self._pending_confirmation)
+                    step_status = "ok"
+                    continue
+
+                # Check if a question is being asked
+                if action.get("type") == "ask_question":
+                    self._pending_question = QuestionRequest(
+                        question=action.get("question", "Please provide input"),
+                        context=action.get("context"),
+                    )
+                    if self._on_question_required:
+                        self._on_question_required(self._pending_question)
+                    step_status = "ok"
+                    continue
+
+                # Check for task completion - enter paused state, don't return
+                if action.get("type") == "finish":
+                    self._update_state(
+                        status=AgentStatus.FINISH,
+                        progress_message=action.get("message", "Task completed successfully"),
+                    )
+                    step_status = "ok"
+
+                    # Wait for user to either send_message() to continue or end() to truly finish
+                    self._paused_for_finish = True
+                    self._finish_event.clear()
+                    await self._finish_event.wait()
+                    self._paused_for_finish = False
+
+                    # If user called end() to finish, exit the loop
+                    if not self._running:
+                        return TaskResult(
+                            success=True,
+                            message=action.get("message", "Task completed successfully"),
+                            steps_taken=step,
+                            duration_seconds=time.time() - self._task_start_time,
+                        )
+                    # Otherwise, user added a message - continue the loop
+                    self._update_state(status=AgentStatus.RUNNING)
+                    continue
+
+                # Check for failure
+                if action.get("type") == "fail":
+                    self._update_state(
+                        status=AgentStatus.FAIL,
+                        error=action.get("reason", "Unknown error"),
+                    )
+                    step_status = "internal_error"
                     return TaskResult(
-                        success=True,
-                        message=action.get("message", "Task completed successfully"),
+                        success=False,
+                        message=action.get("reason", "Task failed"),
                         steps_taken=step,
                         duration_seconds=time.time() - self._task_start_time,
                     )
-                # Otherwise, user added a message - continue the loop
-                self._update_state(status=AgentStatus.RUNNING)
-                continue
 
-            # Check for failure
-            if action.get("type") == "fail":
-                self._update_state(
-                    status=AgentStatus.FAIL,
-                    error=action.get("reason", "Unknown error"),
-                )
-                return TaskResult(
-                    success=False,
-                    message=action.get("reason", "Task failed"),
-                    steps_taken=step,
-                    duration_seconds=time.time() - self._task_start_time,
+                # Execute the action with span tracking
+                action_type = action.get("type", "unknown")
+                action_span = self._telemetry.start_span(
+                    operation=f"action.{action_type}",
+                    description=f"Execute {action_type}",
+                    parent_span=step_transaction,
                 )
 
-            # Execute the action
-            await self._run_action(action)
+                try:
+                    await self._run_action(action)
+                    self._telemetry.set_span_status(action_span, "ok")
+                except Exception as e:
+                    self._telemetry.set_span_status(action_span, "internal_error")
+                    self._telemetry.set_span_data(action_span, "error", str(e))
+                    raise
+                finally:
+                    self._telemetry.finish_span(action_span)
 
-            # Record action as assistant message with tool call
-            self._add_message({
-                "role": "assistant",
-                "content": response.reasoning or "",
-                "tool_calls": [
-                    {
-                        "id": str(uuid.uuid4()),
-                        "type": "function",
-                        "function": {
-                            "name": action.get("type", "unknown"),
-                            "arguments": json.dumps(action),
+                # Record action as assistant message with tool call
+                self._add_message({
+                    "role": "assistant",
+                    "content": response.reasoning or "",
+                    "tool_calls": [
+                        {
+                            "id": str(uuid.uuid4()),
+                            "type": "function",
+                            "function": {
+                                "name": action.get("type", "unknown"),
+                                "arguments": json.dumps(action),
+                            },
                         },
-                    },
-                ],
-            })
+                    ],
+                })
 
-            await asyncio.sleep(self._step_delay)
+                await asyncio.sleep(self._step_delay)
+            except Exception:
+                step_status = "internal_error"
+                raise
+            finally:
+                # Finish the step transaction
+                self._telemetry.set_span_status(step_transaction, step_status)
+                self._telemetry.finish_span(step_transaction)
 
         self._update_state(status=AgentStatus.FAIL, error="Maximum steps reached")
         return TaskResult(
@@ -402,6 +477,14 @@ class AGIClient:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
+        # Add correlation ID header for distributed tracing
+        if self._correlation_id:
+            headers["X-Correlation-ID"] = self._correlation_id
+
+        # Add Sentry trace headers for end-to-end waterfall tracking
+        trace_headers = self._telemetry.get_trace_headers()
+        headers.update(trace_headers)
+
         request = StartSessionRequest(task=task, context=context)
         response = await self._http_client.post(
             f"{self._api_url}/v1/quantum/sessions",
@@ -420,6 +503,14 @@ class AGIClient:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
+        # Add correlation ID header for distributed tracing
+        if self._correlation_id:
+            headers["X-Correlation-ID"] = self._correlation_id
+
+        # Add Sentry trace headers for end-to-end waterfall tracking
+        trace_headers = self._telemetry.get_trace_headers()
+        headers.update(trace_headers)
+
         response = await self._http_client.post(
             f"{self._api_url}/v1/quantum/sessions/{self._session_id}/inference",
             json=request.model_dump(),
@@ -436,6 +527,14 @@ class AGIClient:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
+
+        # Add correlation ID header for distributed tracing
+        if self._correlation_id:
+            headers["X-Correlation-ID"] = self._correlation_id
+
+        # Add Sentry trace headers for end-to-end waterfall tracking
+        trace_headers = self._telemetry.get_trace_headers()
+        headers.update(trace_headers)
 
         request = FinishSessionRequest(reason=reason)
         response = await self._http_client.post(
@@ -455,6 +554,14 @@ class AGIClient:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
+
+        # Add correlation ID header for distributed tracing
+        if self._correlation_id:
+            headers["X-Correlation-ID"] = self._correlation_id
+
+        # Add Sentry trace headers for end-to-end waterfall tracking
+        trace_headers = self._telemetry.get_trace_headers()
+        headers.update(trace_headers)
 
         request = FinishSessionRequest(reason=reason)
         response = await self._http_client.post(

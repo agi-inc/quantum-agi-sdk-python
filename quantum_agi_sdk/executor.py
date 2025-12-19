@@ -106,8 +106,10 @@ class ActionExecutor:
         """
         action_type = action.get("type")
 
-        if action_type in ("click", "double_click", "right_click"):
+        if action_type in ("click", "double_click", "right_click", "triple_click"):
             return self._execute_click(action)
+        elif action_type == "hover":
+            return self._execute_hover(action)
         elif action_type == "type":
             return self._execute_type(action)
         elif action_type == "key":
@@ -118,7 +120,7 @@ class ActionExecutor:
             return self._execute_drag(action)
         elif action_type == "wait":
             return self._execute_wait(action)
-        elif action_type in ("finish", "fail", "confirm", "screenshot"):
+        elif action_type in ("finish", "fail", "confirm", "ask_question"):
             # These are control actions, not device actions
             return True
         else:
@@ -133,6 +135,8 @@ class ActionExecutor:
 
         if action_type == "double_click":
             pyautogui.doubleClick(x, y, button=button)
+        elif action_type == "triple_click":
+            pyautogui.tripleClick(x, y, button=button)
         elif action_type == "right_click":
             pyautogui.rightClick(x, y)
         else:
@@ -140,9 +144,16 @@ class ActionExecutor:
 
         return True
 
+    def _execute_hover(self, action: dict) -> bool:
+        """Execute a hover (move mouse) action"""
+        # Convert from physical (screenshot) to logical (click) coordinates
+        x, y = to_logical_coords(action["x"], action["y"])
+        pyautogui.moveTo(x, y)
+        return True
+
     def _execute_type(self, action: dict) -> bool:
         """Execute a type action"""
-        text = action["text"]
+        text = action.get("text") or action.get("content") or ""
         # Use interval for more natural typing
         pyautogui.write(text, interval=0.02)
         return True

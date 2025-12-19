@@ -3,9 +3,7 @@ Main AGI Client - The primary SDK interface
 """
 
 import asyncio
-import json
 import os
-import threading
 import time
 import uuid
 from datetime import datetime
@@ -21,12 +19,9 @@ from quantum_agi_sdk.models import (
     ConfirmationRequest,
     QuestionRequest,
     TaskResult,
-    StartSessionRequest,
-    StartSessionResponse,
-    QuantumInferenceRequest,
-    QuantumInferenceResponse,
-    FinishSessionRequest,
-    FinishSessionResponse,
+    GetActionRequest,
+    GetActionResponse,
+    parse_action_string,
 )
 from quantum_agi_sdk.telemetry import TelemetryManager
 
@@ -38,7 +33,7 @@ class AGIClient:
     This is the main interface for the Quantum AGI SDK. It handles:
     - Task orchestration
     - Screenshot capture
-    - Cloud inference communication
+    - Cloud inference communication (via /get_action)
     - Local action execution
     - Confirmation flow for high-impact actions
     """
@@ -47,42 +42,51 @@ class AGIClient:
         self,
         api_url: Optional[str] = None,
         api_key: Optional[str] = None,
-        model: Optional[str] = None,
         on_status_change: Optional[Callable[[AgentState], None]] = None,
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
         on_question_required: Optional[Callable[[QuestionRequest], None]] = None,
         on_action_executed: Optional[Callable[[dict], None]] = None,
         max_steps: int = 100,
         step_delay: float = 0.5,
+        agent_type: str = "agi-0",
+        platform: str = "desktop",
+        run_type: str = "user_traffic",
+        user_id: Optional[str] = None,
     ):
         """
         Initialize the AGI Client.
 
         Args:
-            api_url: API URL (default: https://api.agi.tech)
-            api_key: API key for authentication
-            model: Model to use for inference (e.g., 'agi-0', 'agi-1-preview'). If not set, uses server default.
+            api_url: API URL (default: https://agi-inc--quantum-agi-cloud-dev-web.modal.run)
+            api_key: API key for authentication (optional)
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
             on_question_required: Callback when agent asks a question requiring user input
             on_action_executed: Callback after each action is executed
             max_steps: Maximum steps before stopping
             step_delay: Delay between steps in seconds
+            agent_type: Agent type: "agi-0" or "agi-1-preview" (default: agi-0)
+            platform: Platform identifier (default: desktop)
+            run_type: Run type (default: user_traffic)
+            user_id: User ID for tracking (optional)
         """
-        self._api_url = (api_url or os.environ.get("AGI_API_URL") or "https://api.agi.tech").rstrip("/")
+        self._api_url = (api_url or os.environ.get("AGI_API_URL") or "https://agi-inc--quantum-agi-cloud-dev-web.modal.run").rstrip("/")
         self._api_key = api_key
-        self._model = model
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required
         self._on_question_required = on_question_required
         self._on_action_executed = on_action_executed
         self._max_steps = max_steps
         self._step_delay = step_delay
+        self._agent_type = agent_type
+        self._platform = platform
+        self._run_type = run_type
+        self._user_id = user_id
 
         self._state = AgentState()
         self._capture = ScreenCapture()
         self._executor = ActionExecutor()
-        self._http_client = httpx.AsyncClient(timeout=30.0)
+        self._http_client = httpx.AsyncClient(timeout=60.0)
 
         self._running = False
         self._paused = False
@@ -92,13 +96,11 @@ class AGIClient:
         self._pending_question: Optional[QuestionRequest] = None
         self._question_event = asyncio.Event()
         self._answer: Optional[str] = None
-        self._messages: list[dict] = []
-        self._messages_lock = threading.Lock()
         self._task_start_time: Optional[float] = None
         self._session_id: Optional[str] = None
         self._paused_for_finish = False
         self._finish_event = asyncio.Event()
-        self._correlation_id: Optional[str] = None
+        self._current_prompt: Optional[str] = None
 
         # Initialize telemetry - sends directly to Sentry
         self._telemetry = TelemetryManager()
@@ -114,7 +116,7 @@ class AGIClient:
         Start executing a task.
 
         Args:
-            task: The task/intent from Quantum
+            task: The task/intent for the agent
             context: Optional context
 
         Returns:
@@ -125,11 +127,11 @@ class AGIClient:
 
         self._running = True
         self._paused = False
-        self._clear_messages()
         self._task_start_time = time.time()
+        self._current_prompt = task
 
-        # Generate correlation ID for tracing
-        self._correlation_id = f"qs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        # Generate session ID for this run
+        self._session_id = f"sdk-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
         # Send real-time event for session start
         self._telemetry.capture_message(
@@ -137,7 +139,7 @@ class AGIClient:
             level="info",
             tags={
                 "event_name": "session_start",
-                "correlation_id": self._correlation_id,
+                "session_id": self._session_id,
             },
             extras={
                 "task": task,
@@ -169,26 +171,8 @@ class AGIClient:
 
     async def _run_task_loop(self, task: str, context: Optional[dict]) -> TaskResult:
         """Main task execution loop"""
-        try:
-            session = await self._start_session(task, context)
-            self._session_id = session.id
-        except Exception as e:
-            raise RuntimeError(f"Failed to start session: {e}")
-
-        # Add initial task as user message
-        self._add_message({
-            "role": "user",
-            "content": [{"type": "text", "text": f"Task: {task}"}],
-        })
-
-        try:
-            return await self._execute_task_loop(task, context)
-        finally:
-            await self._finish_session_safe()
-
-    async def _execute_task_loop(self, task: str, context: Optional[dict]) -> TaskResult:
-        """Execute the task loop after session is started"""
         step = 0
+
         while step < self._max_steps and self._running:
             while self._paused and self._running:
                 await asyncio.sleep(0.1)
@@ -204,21 +188,8 @@ class AGIClient:
                 await self._confirmation_event.wait()
                 self._confirmation_event.clear()
 
-                if self._confirmed:
-                    # User approved - insert confirmation message and execute action
-                    self._add_message({
-                        "role": "user",
-                        "content": [{"type": "text", "text": "User confirmed the action."}],
-                    })
-                    if self._pending_confirmation.pending_action:
-                        await self._run_action(self._pending_confirmation.pending_action)
-                else:
-                    # User denied - insert denial message and let agent adapt
-                    action_desc = self._pending_confirmation.action_description
-                    self._add_message({
-                        "role": "user",
-                        "content": [{"type": "text", "text": f"User denied the action: {action_desc}. Please try a different approach."}],
-                    })
+                if self._confirmed and self._pending_confirmation.pending_action:
+                    await self._run_action(self._pending_confirmation.pending_action)
 
                 self._pending_confirmation = None
                 self._update_state(status=AgentStatus.RUNNING)
@@ -232,18 +203,9 @@ class AGIClient:
                 await self._question_event.wait()
                 self._question_event.clear()
 
+                # Update prompt with user answer if provided
                 if self._answer is not None:
-                    # User provided answer - insert as user message
-                    self._add_message({
-                        "role": "user",
-                        "content": [{"type": "text", "text": f"User answer: {self._answer}"}],
-                    })
-                else:
-                    # User declined to answer - insert decline message
-                    self._add_message({
-                        "role": "user",
-                        "content": [{"type": "text", "text": "User declined to answer. Please proceed without this information."}],
-                    })
+                    self._current_prompt = f"{task}\n\nUser answer to '{self._pending_question.question}': {self._answer}"
 
                 self._pending_question = None
                 self._answer = None
@@ -261,7 +223,6 @@ class AGIClient:
                 name=f"agent.step.{step}",
                 operation="agent.step",
                 tags={
-                    "correlation_id": self._correlation_id or "",
                     "session_id": self._session_id or "",
                     "step": str(step),
                 },
@@ -286,37 +247,31 @@ class AGIClient:
                 finally:
                     self._telemetry.finish_span(screenshot_span)
 
-                # Add screenshot as user message
-                self._add_message({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
-                        },
-                    ],
-                })
-
-                # Keep only last ~20 messages to avoid context overflow
-                self._trim_messages(20)
-
-                # Get next action from cloud inference with span tracking
+                # Call cloud /get_action endpoint
                 inference_span = self._telemetry.start_span(
                     operation="http.client",
-                    description=f"POST /v1/quantum/sessions/{self._session_id}/inference",
+                    description="POST /get_action",
                     parent_span=step_transaction,
                 )
                 self._telemetry.set_span_tag(inference_span, "http.method", "POST")
-                self._telemetry.set_span_data(inference_span, "http.url", f"{self._api_url}/v1/quantum/sessions/{self._session_id}/inference")
+                self._telemetry.set_span_data(inference_span, "http.url", f"{self._api_url}/get_action")
 
-                request = QuantumInferenceRequest(
-                    messages=self._filter_messages_for_images(self._get_messages_copy()),
-                    model=self._model,
+                request = GetActionRequest(
+                    session_id=self._session_id,
+                    image=screenshot_b64,
+                    prompt=self._current_prompt or task,
+                    phone_state="",
+                    installed_packages="",
+                    think=True,
+                    agent_type=self._agent_type,
+                    user_id=self._user_id,
+                    platform=self._platform,
+                    run_type=self._run_type,
                 )
 
                 inference_start_time = time.time()
                 try:
-                    response = await self._call_quantum_inference(request)
+                    response = await self._call_get_action(request)
                     self._telemetry.set_span_status(inference_span, "ok")
                     self._telemetry.set_span_data(inference_span, "http.status_code", 200)
                 except Exception as e:
@@ -328,7 +283,9 @@ class AGIClient:
                     self._telemetry.set_span_data(inference_span, "latency_ms", latency_ms)
                     self._telemetry.finish_span(inference_span)
 
-                action = response.action
+                # Parse action string
+                action = parse_action_string(response.action)
+                action_type = action.get("type", "unknown")
 
                 # Send real-time event for inference response
                 self._telemetry.capture_message(
@@ -336,50 +293,41 @@ class AGIClient:
                     level="info",
                     tags={
                         "event_name": "http_response",
-                        "correlation_id": self._correlation_id,
                         "session_id": self._session_id,
                     },
                     extras={
                         "step": step,
-                        "action_type": action.get("type", "unknown"),
-                        "confidence": response.confidence,
-                        "requires_confirmation": response.requires_confirmation,
-                        "reasoning": response.reasoning or "",
+                        "action_type": action_type,
+                        "image_count": response.image_count,
                     },
                 )
 
                 # Check if confirmation is required
-                if response.requires_confirmation or action.get("type") == "confirm":
+                if action_type == "confirm":
                     self._pending_confirmation = ConfirmationRequest(
-                        action_description=action.get(
-                            "action_description", response.reasoning or "Confirm this action?"
-                        ),
-                        pending_action=action.get("pending_action", action),
+                        action_description=action.get("message", "Confirm this action?"),
+                        pending_action=action,
                         context={"step": step, "task": task},
                     )
                     if self._on_confirmation_required:
                         self._on_confirmation_required(self._pending_confirmation)
-                    step_status = "ok"
                     continue
 
                 # Check if a question is being asked
-                if action.get("type") == "ask_question":
+                if action_type == "ask_question":
                     self._pending_question = QuestionRequest(
                         question=action.get("question", "Please provide input"),
-                        context=action.get("context"),
                     )
                     if self._on_question_required:
                         self._on_question_required(self._pending_question)
-                    step_status = "ok"
                     continue
 
                 # Check for task completion - enter paused state, don't return
-                if action.get("type") == "finish":
+                if action_type == "finish":
                     self._update_state(
                         status=AgentStatus.FINISH,
-                        progress_message=action.get("message", "Task completed successfully"),
+                        progress_message=action.get("summary") or action.get("message") or "Task completed successfully",
                     )
-                    step_status = "ok"
 
                     # Wait for user to either send_message() to continue or end() to truly finish
                     self._paused_for_finish = True
@@ -391,7 +339,7 @@ class AGIClient:
                     if not self._running:
                         return TaskResult(
                             success=True,
-                            message=action.get("message", "Task completed successfully"),
+                            message=action.get("summary") or action.get("message") or "Task completed successfully",
                             steps_taken=step,
                             duration_seconds=time.time() - self._task_start_time,
                         )
@@ -400,7 +348,7 @@ class AGIClient:
                     continue
 
                 # Check for failure
-                if action.get("type") == "fail":
+                if action_type == "fail":
                     self._update_state(
                         status=AgentStatus.FAIL,
                         error=action.get("reason", "Unknown error"),
@@ -414,7 +362,6 @@ class AGIClient:
                     )
 
                 # Execute the action with span tracking
-                action_type = action.get("type", "unknown")
                 action_span = self._telemetry.start_span(
                     operation=f"action.{action_type}",
                     description=f"Execute {action_type}",
@@ -430,22 +377,6 @@ class AGIClient:
                     raise
                 finally:
                     self._telemetry.finish_span(action_span)
-
-                # Record action as assistant message with tool call
-                self._add_message({
-                    "role": "assistant",
-                    "content": response.reasoning or "",
-                    "tool_calls": [
-                        {
-                            "id": str(uuid.uuid4()),
-                            "type": "function",
-                            "function": {
-                                "name": action.get("type", "unknown"),
-                                "arguments": json.dumps(action),
-                            },
-                        },
-                    ],
-                })
 
                 await asyncio.sleep(self._step_delay)
             except Exception:
@@ -471,129 +402,19 @@ class AGIClient:
         if self._on_action_executed:
             self._on_action_executed(action)
 
-    async def _start_session(self, task: str, context: Optional[dict]) -> StartSessionResponse:
-        """Start a quantum agent session"""
+    async def _call_get_action(self, request: GetActionRequest) -> GetActionResponse:
+        """Call the /get_action endpoint"""
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        # Add correlation ID header for distributed tracing
-        if self._correlation_id:
-            headers["X-Correlation-ID"] = self._correlation_id
-
-        # Add Sentry trace headers for end-to-end waterfall tracking
-        trace_headers = self._telemetry.get_trace_headers()
-        headers.update(trace_headers)
-
-        request = StartSessionRequest(task=task, context=context)
         response = await self._http_client.post(
-            f"{self._api_url}/v1/quantum/sessions",
+            f"{self._api_url}/get_action",
             json=request.model_dump(),
             headers=headers,
         )
         response.raise_for_status()
-        return StartSessionResponse(**response.json())
-
-    async def _call_quantum_inference(self, request: QuantumInferenceRequest) -> QuantumInferenceResponse:
-        """Call the quantum inference endpoint"""
-        if not self._session_id:
-            raise RuntimeError("No active session")
-
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-
-        # Add correlation ID header for distributed tracing
-        if self._correlation_id:
-            headers["X-Correlation-ID"] = self._correlation_id
-
-        # Add Sentry trace headers for end-to-end waterfall tracking
-        trace_headers = self._telemetry.get_trace_headers()
-        headers.update(trace_headers)
-
-        response = await self._http_client.post(
-            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/inference",
-            json=request.model_dump(),
-            headers=headers,
-        )
-        response.raise_for_status()
-        return QuantumInferenceResponse(**response.json())
-
-    async def _finish_session(self, reason: Optional[str] = None) -> FinishSessionResponse:
-        """Finish the current session successfully"""
-        if not self._session_id:
-            raise RuntimeError("No active session")
-
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-
-        # Add correlation ID header for distributed tracing
-        if self._correlation_id:
-            headers["X-Correlation-ID"] = self._correlation_id
-
-        # Add Sentry trace headers for end-to-end waterfall tracking
-        trace_headers = self._telemetry.get_trace_headers()
-        headers.update(trace_headers)
-
-        request = FinishSessionRequest(reason=reason)
-        response = await self._http_client.post(
-            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/finish",
-            json=request.model_dump(),
-            headers=headers,
-        )
-        response.raise_for_status()
-        self._session_id = None
-        return FinishSessionResponse(**response.json())
-
-    async def _fail_session(self, reason: Optional[str] = None) -> FinishSessionResponse:
-        """Fail the current session"""
-        if not self._session_id:
-            raise RuntimeError("No active session")
-
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-
-        # Add correlation ID header for distributed tracing
-        if self._correlation_id:
-            headers["X-Correlation-ID"] = self._correlation_id
-
-        # Add Sentry trace headers for end-to-end waterfall tracking
-        trace_headers = self._telemetry.get_trace_headers()
-        headers.update(trace_headers)
-
-        request = FinishSessionRequest(reason=reason)
-        response = await self._http_client.post(
-            f"{self._api_url}/v1/quantum/sessions/{self._session_id}/fail",
-            json=request.model_dump(),
-            headers=headers,
-        )
-        response.raise_for_status()
-        self._session_id = None
-        return FinishSessionResponse(**response.json())
-
-    async def _finish_session_safe(self):
-        """Safely finish the session, ignoring errors"""
-        if not self._session_id:
-            return
-        try:
-            if self._state.status == AgentStatus.FAIL:
-                await self._fail_session()
-            else:
-                await self._finish_session()
-        except Exception as e:
-            # Log cleanup errors but don't throw - we're in cleanup phase
-            self._telemetry.add_breadcrumb(
-                category="quantum.sdk",
-                message="session_cleanup_error",
-                level="error",
-                data={
-                    "correlation_id": self._correlation_id or "",
-                    "session_id": self._session_id or "",
-                    "error": str(e),
-                },
-            )
+        return GetActionResponse(**response.json())
 
     def send_message(self, message: str):
         """Send a user message to the agent.
@@ -601,10 +422,12 @@ class AGIClient:
         This can be used to provide additional context or instructions.
         If the agent is paused after a finish action, this will resume execution.
         """
-        self._add_message({
-            "role": "user",
-            "content": [{"type": "text", "text": message}],
-        })
+        # Update the current prompt with the new message
+        if self._current_prompt:
+            self._current_prompt = f"{self._current_prompt}\n\nUser: {message}"
+        else:
+            self._current_prompt = message
+
         # Resume loop if paused after finish
         if self._paused_for_finish:
             self._update_state(status=AgentStatus.RUNNING)
@@ -670,63 +493,6 @@ class AGIClient:
                 setattr(self._state, key, value)
         if self._on_status_change:
             self._on_status_change(self._state)
-
-    def _add_message(self, message: dict):
-        """Thread-safe method to add a message to the conversation"""
-        with self._messages_lock:
-            self._messages.append(message)
-
-    def _get_messages_copy(self) -> list[dict]:
-        """Thread-safe method to get a copy of all messages"""
-        with self._messages_lock:
-            return list(self._messages)
-
-    @staticmethod
-    def _filter_messages_for_images(messages: list[dict], max_images: int = 5) -> list[dict]:
-        """Filter messages to keep only the last N images.
-
-        Does not modify the original messages - returns a new filtered list.
-        """
-        result = []
-        image_count = 0
-
-        # Process messages in reverse to keep the last N images
-        for msg in reversed(messages):
-            content = msg.get("content")
-            if isinstance(content, list):
-                filtered_content = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "image_url":
-                        if image_count < max_images:
-                            filtered_content.append(block)
-                            image_count += 1
-                        # Skip images beyond the limit
-                    else:
-                        # Keep non-image content
-                        filtered_content.append(block)
-
-                # Only add message if it has content left
-                if filtered_content:
-                    result.insert(0, {
-                        **msg,
-                        "content": filtered_content,
-                    })
-            else:
-                # Non-content-array messages (string content) pass through
-                result.insert(0, msg)
-
-        return result
-
-    def _trim_messages(self, max_count: int):
-        """Thread-safe method to trim messages to a maximum count"""
-        with self._messages_lock:
-            if len(self._messages) > max_count:
-                self._messages = self._messages[-max_count:]
-
-    def _clear_messages(self):
-        """Thread-safe method to clear all messages"""
-        with self._messages_lock:
-            self._messages = []
 
     async def close(self):
         """Clean up resources"""

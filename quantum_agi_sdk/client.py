@@ -46,7 +46,7 @@ class AGIClient:
         on_confirmation_required: Optional[Callable[[ConfirmationRequest], None]] = None,
         on_question_required: Optional[Callable[[QuestionRequest], None]] = None,
         on_action_executed: Optional[Callable[[dict], None]] = None,
-        max_steps: int = 100,
+        max_steps: int = 1000,
         step_delay: float = 0.5,
         agent_type: str = "agi-0",
         platform: str = "desktop",

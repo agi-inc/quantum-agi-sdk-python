@@ -57,7 +57,7 @@ class AGIClient:
         Initialize the AGI Client.
 
         Args:
-            api_url: API URL (default: https://agi-inc--quantum-agi-cloud-dev-web.modal.run)
+            api_url: API URL (default: https://quantum.agi.tech)
             api_key: API key for authentication (optional)
             on_status_change: Callback for agent status changes
             on_confirmation_required: Callback when user confirmation is needed
@@ -70,7 +70,7 @@ class AGIClient:
             run_type: Run type (default: user_traffic)
             user_id: User ID for tracking (optional)
         """
-        self._api_url = (api_url or os.environ.get("AGI_API_URL") or "https://agi-inc--quantum-agi-cloud-dev-web.modal.run").rstrip("/")
+        self._api_url = (api_url or os.environ.get("AGI_API_URL") or "https://quantum.agi.tech").rstrip("/")
         self._api_key = api_key
         self._on_status_change = on_status_change
         self._on_confirmation_required = on_confirmation_required

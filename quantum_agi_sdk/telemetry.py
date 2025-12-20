@@ -10,8 +10,8 @@ from typing import Any, Optional, Dict, Callable, TypeVar
 
 T = TypeVar('T')
 
-# Sentry DSN for the agent-api-server project
-SENTRY_DSN = "https://1bb09da3f54d24a607294f1c070a8d48@o4509402314309632.ingest.us.sentry.io/4510377562865664"
+# Sentry DSN for the quantum-agi-server project (dedicated tracing for SDK ↔ cloud)
+SENTRY_DSN = "https://e0cd7a6db952baa9eede91d605672d22@o4509402314309632.ingest.us.sentry.io/4510565023285248"
 
 # Type alias for Sentry spans (used when sentry_sdk is available)
 Span = Any
